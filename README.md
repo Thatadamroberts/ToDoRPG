@@ -29,6 +29,12 @@ Hero names and category names can be changed from the Party screen. You can recr
   Battle screen to fight the current monster. Defeating it gives gold and EXP to the whole party
   and moves you to the next floor. Every 5th floor is a boss. Deeper floors have recoloured,
   tougher monsters.
+- **Battle commands**: tap a hero, then choose **Attack**, their class **Skill** (costs MP),
+  **Guard** (halves the next hit, restores 3 MP) or **Item** (free). Each hero's attack has an
+  element, and every monster has two weaknesses. Hitting one deals 1.5x damage, reveals it, and fills
+  the **BREAK** gauge; a broken monster is stunned and takes extra damage for 3 turns.
+  Monsters show their next move above their head (who they'll hit, and in how many turns) and
+  strike back when the count reaches zero. MP comes back from finishing quests (+2) and resting.
 - **Missed dailies**: when a new day starts, the monster hits the hero of each daily you missed
   yesterday (the penalty covers at most 3 days, so a holiday won't wipe you out). A hero at 0 HP is KO'd: they
   can't fight and earn half EXP until revived. Levelling up fully heals and revives a hero.
@@ -56,6 +62,14 @@ Progress is saved on the device in `files/save.json`.
 - Fonts: [Press Start 2P](https://fonts.google.com/specimen/Press+Start+2P) and
   [Pixelify Sans](https://fonts.google.com/specimen/Pixelify+Sans), both under the SIL Open Font
   License (see `licenses/`).
+
+## Updating without losing progress
+
+Android only installs an update over the old app if both are signed with the same key. To make
+every GitHub build use one key, add two repository secrets (Settings → Secrets and variables →
+Actions): `SIGNING_KEYSTORE_B64` (the keystore file, base64-encoded) and `SIGNING_PASSWORD`.
+Without them, builds fall back to a random debug key and you'd need to uninstall first.
+Each build's version number comes from the CI run number, so newer builds always count as upgrades.
 
 ## Building
 
