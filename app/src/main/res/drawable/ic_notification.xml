@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Pixel sword, white silhouette for the status bar. -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp" android:height="24dp"
+    android:viewportWidth="16" android:viewportHeight="16">
+    <path android:fillColor="#FFFFFFFF"
+        android:pathData="M13,1h2v2h-1v1h-1v1h-1v1h-1v1h-1v1h-1v1h-1v1h-1v-1h-1v-1h1v-1h1v-1h1v-1h1v-1h1v-1h1v-1h1zM3,9h1v1h1v1h1v1h1v1h-2v1h-1v1h-2v-2h1v-1h-1v-2h1z" />
+</vector>

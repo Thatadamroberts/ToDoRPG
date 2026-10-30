@@ -1,5 +1,10 @@
 package com.todorpg.app.ui.screens
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.foundation.Canvas
 import androidx.compose.foundation.ExperimentalFoundationApi
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
@@ -20,12 +25,14 @@ import androidx.compose.foundation.lazy.items
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
 import androidx.compose.runtime.getValue
 import androidx.compose.runtime.mutableStateOf
 import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextDecoration
 import androidx.compose.ui.unit.dp
 import com.todorpg.app.data.Difficulty
@@ -42,7 +49,9 @@ import com.todorpg.app.ui.components.RpgDialog
 import com.todorpg.app.ui.components.RpgTextField
 import com.todorpg.app.ui.components.RpgWindow
 import com.todorpg.app.ui.components.Sprites
+import com.todorpg.app.ui.components.sparkleBurst
 import com.todorpg.app.ui.theme.RpgColors
+import kotlinx.coroutines.launch
 
 @Composable
 fun QuestsScreen(state: GameState, vm: GameViewModel) {
@@ -123,10 +132,10 @@ private fun CategoryWindow(
 ) {
     RpgWindow(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            PixelSprite(Sprites.hero(hero.heroClass), Modifier.size(32.dp), grayscale = hero.isKo)
+            PixelSprite(Sprites.hero(hero.heroClass), Modifier.size(36.dp), phase = hero.id * 170, grayscale = hero.isKo)
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
-                Text(hero.category.uppercase(), style = MaterialTheme.typography.titleMedium, color = RpgColors.Gold)
+                Text(hero.category.uppercase(), style = MaterialTheme.typography.titleSmall, color = RpgColors.Gold)
                 Text(
                     "${hero.name} the ${hero.heroClass.title}  Lv${hero.level}",
                     style = MaterialTheme.typography.labelMedium,
@@ -157,19 +166,38 @@ private fun TaskRow(task: Task, today: Long, onComplete: () -> Unit, onLongPress
         Modifier
             .fillMaxWidth()
             .combinedClickable(onClick = { if (!done) onComplete() }, onLongClick = onLongPress)
-            .padding(vertical = 8.dp, horizontal = 2.dp),
+            .padding(vertical = 2.dp, horizontal = 2.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Box(
-            Modifier
-                .size(18.dp)
-                .border(2.dp, if (done) RpgColors.Gold else RpgColors.Border)
-                .background(if (done) RpgColors.WindowTop else RpgColors.WindowBottom),
-            contentAlignment = Alignment.Center,
-        ) {
-            if (done) Text("✓", style = MaterialTheme.typography.labelMedium, color = RpgColors.Gold)
+        // Pop + sparkle when a quest is completed while on screen.
+        val pop = remember { Animatable(1f) }
+        val burst = remember { Animatable(0f) }
+        var wasDone by remember { mutableStateOf(done) }
+        LaunchedEffect(done) {
+            if (done && !wasDone) {
+                launch { burst.snapTo(0f); burst.animateTo(1f, tween(600)) }
+                pop.snapTo(1.6f)
+                pop.animateTo(1f, spring(dampingRatio = 0.35f, stiffness = Spring.StiffnessMedium))
+            }
+            wasDone = done
         }
-        Spacer(Modifier.width(10.dp))
+        Box(contentAlignment = Alignment.Center) {
+            Canvas(Modifier.size(36.dp)) { sparkleBurst(burst.value, count = 10) }
+            Box(
+                Modifier
+                    .size(18.dp)
+                    .graphicsLayer {
+                        scaleX = pop.value
+                        scaleY = pop.value
+                    }
+                    .border(2.dp, if (done) RpgColors.Gold else RpgColors.Border)
+                    .background(if (done) RpgColors.WindowTop else RpgColors.WindowBottom),
+                contentAlignment = Alignment.Center,
+            ) {
+                if (done) Text("✓", style = MaterialTheme.typography.labelMedium, color = RpgColors.Gold)
+            }
+        }
+        Spacer(Modifier.width(2.dp))
         Column(Modifier.weight(1f)) {
             Text(
                 task.title,

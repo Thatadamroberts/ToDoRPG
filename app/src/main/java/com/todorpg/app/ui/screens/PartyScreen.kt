@@ -1,24 +1,22 @@
 package com.todorpg.app.ui.screens
 
-import androidx.compose.animation.core.RepeatMode
-import androidx.compose.animation.core.animateFloat
-import androidx.compose.animation.core.infiniteRepeatable
-import androidx.compose.animation.core.rememberInfiniteTransition
-import androidx.compose.animation.core.tween
+import androidx.compose.foundation.background
+import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.Arrangement
+import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.Row
 import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxSize
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
-import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.layout.width
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
@@ -28,10 +26,17 @@ import androidx.compose.runtime.remember
 import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
+import com.todorpg.app.data.Equipment
 import com.todorpg.app.data.GameState
+import com.todorpg.app.data.GearSlot
 import com.todorpg.app.data.Hero
+import com.todorpg.app.data.HeroClass
 import com.todorpg.app.data.Item
+import com.todorpg.app.data.Rules
 import com.todorpg.app.ui.GameViewModel
 import com.todorpg.app.ui.components.ChargePips
 import com.todorpg.app.ui.components.MenuButton
@@ -40,6 +45,7 @@ import com.todorpg.app.ui.components.RpgButton
 import com.todorpg.app.ui.components.RpgDialog
 import com.todorpg.app.ui.components.RpgTextField
 import com.todorpg.app.ui.components.RpgWindow
+import com.todorpg.app.ui.components.SectionTitle
 import com.todorpg.app.ui.components.Sprites
 import com.todorpg.app.ui.components.StatBar
 import com.todorpg.app.ui.components.hpColor
@@ -47,49 +53,78 @@ import com.todorpg.app.ui.theme.RpgColors
 
 @Composable
 fun PartyScreen(state: GameState, vm: GameViewModel) {
-    var selected by remember { mutableStateOf<Hero?>(null) }
+    var selectedId by remember { mutableStateOf<Int?>(null) }
+    var recruiting by remember { mutableStateOf(false) }
 
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(state.heroes, key = { it.id }) { hero ->
-            HeroCard(hero, Modifier.clickable { selected = hero })
+            HeroCard(hero, Modifier.clickable { vm.click(); selectedId = hero.id })
+        }
+        if (state.heroes.size < Rules.MAX_PARTY) {
+            item {
+                RpgWindow(Modifier.fillMaxWidth().clickable { vm.click(); recruiting = true }) {
+                    Row(verticalAlignment = Alignment.CenterVertically) {
+                        Text("+", style = MaterialTheme.typography.titleLarge, color = RpgColors.Gold)
+                        Spacer(Modifier.width(12.dp))
+                        Column {
+                            Text("Recruit a hero", style = MaterialTheme.typography.bodyLarge)
+                            Text(
+                                "Adds a new category (${state.heroes.size}/${Rules.MAX_PARTY})",
+                                style = MaterialTheme.typography.labelSmall,
+                                color = RpgColors.Dim,
+                            )
+                        }
+                    }
+                }
+            }
         }
         item {
             RpgWindow(Modifier.fillMaxWidth()) {
-                Text("RECORDS", style = MaterialTheme.typography.titleMedium, color = RpgColors.Gold)
+                SectionTitle("RECORDS")
                 Text("Quests completed: ${state.tasksCompleted}", style = MaterialTheme.typography.bodySmall)
                 Text("Monsters defeated: ${state.monstersDefeated}", style = MaterialTheme.typography.bodySmall)
+                Text("Raid bosses defeated: ${state.raidsDefeated}", style = MaterialTheme.typography.bodySmall)
                 Text("Deepest floor: ${state.floor}", style = MaterialTheme.typography.bodySmall)
             }
         }
     }
 
-    selected?.let { s ->
-        // Always show the latest version of the hero.
-        val hero = state.hero(s.id) ?: return@let
-        HeroDialog(hero, state, vm, onDismiss = { selected = null })
+    selectedId?.let { id ->
+        val hero = state.hero(id)
+        if (hero == null) selectedId = null else HeroDialog(hero, state, vm, onDismiss = { selectedId = null })
     }
+    if (recruiting) {
+        RecruitDialog(vm, onDismiss = { recruiting = false })
+    }
+}
+
+/** Hero sprite that lies down when KO'd. */
+@Composable
+fun HeroFigure(hero: Hero, modifier: Modifier = Modifier, frameMs: Int = 480) {
+    PixelSprite(
+        Sprites.hero(hero.heroClass),
+        modifier.graphicsLayer {
+            if (hero.isKo) {
+                rotationZ = -90f
+                translationY = size.height * 0.25f
+            }
+        },
+        frameMs = frameMs,
+        phase = hero.id * 170,
+        grayscale = hero.isKo,
+    )
 }
 
 @Composable
 private fun HeroCard(hero: Hero, modifier: Modifier = Modifier) {
-    val bob by rememberInfiniteTransition(label = "bob").animateFloat(
-        initialValue = 0f,
-        targetValue = if (hero.isKo) 0f else -3f,
-        animationSpec = infiniteRepeatable(tween(600), RepeatMode.Reverse),
-        label = "bob",
-    )
     RpgWindow(modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            PixelSprite(
-                Sprites.hero(hero.heroClass),
-                Modifier.size(64.dp).offset(y = bob.dp),
-                grayscale = hero.isKo,
-            )
+            HeroFigure(hero, Modifier.size(64.dp))
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(hero.name, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
-                    Text("Lv ${hero.level}", style = MaterialTheme.typography.bodyMedium, color = RpgColors.Gold)
+                    Text("Lv ${hero.level}", style = MaterialTheme.typography.titleSmall, color = RpgColors.Gold)
                 }
                 Text(
                     "${hero.heroClass.title} · ${hero.category}" + if (hero.isKo) " · KO" else "",
@@ -105,10 +140,15 @@ private fun HeroCard(hero: Hero, modifier: Modifier = Modifier) {
                 }
                 Row(verticalAlignment = Alignment.CenterVertically) {
                     Text(
-                        "ATK ${hero.attack}" + if (hero.weapon > 0) "  WPN +${hero.weapon}" else "",
+                        "ATK ${hero.attack}  DEF ${hero.defense}",
                         Modifier.weight(1f),
                         style = MaterialTheme.typography.labelMedium,
                     )
+                    GearSlot.entries.forEach { slot ->
+                        val g = hero.gear[slot]
+                        if (g != null) PixelSprite(Sprites.gear(slot, g.rarity), Modifier.size(14.dp).padding(end = 2.dp))
+                    }
+                    Spacer(Modifier.width(6.dp))
                     ChargePips(hero.charges)
                 }
             }
@@ -126,23 +166,68 @@ private fun LabeledBar(label: String, value: String, bar: @Composable (Modifier)
 }
 
 @Composable
+fun GearIcon(gear: Equipment, modifier: Modifier = Modifier) {
+    Box(
+        modifier
+            .size(28.dp)
+            .clip(RoundedCornerShape(3.dp))
+            .background(Color(0xFF080C40))
+            .border(1.dp, Color(gear.rarity.color), RoundedCornerShape(3.dp))
+            .padding(4.dp)
+    ) {
+        PixelSprite(Sprites.gear(gear.slot, gear.rarity), Modifier.fillMaxSize())
+    }
+}
+
+@Composable
 private fun HeroDialog(hero: Hero, state: GameState, vm: GameViewModel, onDismiss: () -> Unit) {
     var name by remember(hero.id) { mutableStateOf(hero.name) }
     var category by remember(hero.id) { mutableStateOf(hero.category) }
+    var pickingSlot by remember { mutableStateOf<GearSlot?>(null) }
 
     RpgDialog(hero.name, onDismiss) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            PixelSprite(Sprites.hero(hero.heroClass), Modifier.size(48.dp), grayscale = hero.isKo)
-            Spacer(Modifier.width(8.dp))
-            Text(
-                "HP ${hero.hp}/${hero.maxHp}\n${hero.heroClass.title}: ${classBlurb(hero)}",
-                style = MaterialTheme.typography.labelMedium,
-            )
+            HeroFigure(hero, Modifier.size(56.dp))
+            Spacer(Modifier.width(10.dp))
+            Column {
+                Text("Lv ${hero.level} ${hero.heroClass.title}", style = MaterialTheme.typography.bodyMedium)
+                Text(
+                    "HP ${hero.hp}/${hero.maxHp}  ATK ${hero.attack}  DEF ${hero.defense}",
+                    style = MaterialTheme.typography.labelMedium,
+                )
+                Text(
+                    "${hero.heroClass.skill}: ${hero.heroClass.blurb}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = RpgColors.Dim,
+                )
+            }
         }
-        Label("Name")
-        RpgTextField(name, { name = it }, placeholder = "Hero name")
-        Label("Category")
-        RpgTextField(category, { category = it }, placeholder = "e.g. Work")
+
+        Label("Equipment")
+        GearSlot.entries.forEach { slot ->
+            val g = hero.gear[slot]
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { vm.click(); pickingSlot = slot }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Text(slot.label, Modifier.width(84.dp), style = MaterialTheme.typography.labelMedium, color = RpgColors.Dim)
+                if (g != null) {
+                    GearIcon(g)
+                    Spacer(Modifier.width(6.dp))
+                    Column(Modifier.weight(1f)) {
+                        Text(g.name, style = MaterialTheme.typography.bodySmall, color = Color(g.rarity.color))
+                        Text(g.statLine, style = MaterialTheme.typography.labelSmall)
+                    }
+                } else {
+                    Text("— empty —", Modifier.weight(1f), style = MaterialTheme.typography.bodySmall, color = RpgColors.Disabled)
+                }
+                Text("›", style = MaterialTheme.typography.titleMedium, color = RpgColors.Gold)
+            }
+        }
 
         Label("Use item")
         Item.entries.forEach { item ->
@@ -151,8 +236,20 @@ private fun HeroDialog(hero: Hero, state: GameState, vm: GameViewModel, onDismis
             }
         }
 
+        Label("Name")
+        RpgTextField(name, { name = it }, placeholder = "Hero name")
+        Label("Category")
+        RpgTextField(category, { category = it }, placeholder = "e.g. Work")
+
         Spacer(Modifier.height(12.dp))
-        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            if (state.heroes.size > 1) {
+                RpgButton("Dismiss") {
+                    vm.dismiss(hero.id)
+                    if (state.tasks.none { it.heroId == hero.id }) onDismiss()
+                }
+            }
+            Spacer(Modifier.weight(1f))
             RpgButton("Close", onClick = onDismiss)
             RpgButton("Save", enabled = name.isNotBlank() && category.isNotBlank()) {
                 vm.editHero(hero.id, name, category)
@@ -160,12 +257,118 @@ private fun HeroDialog(hero: Hero, state: GameState, vm: GameViewModel, onDismis
             }
         }
     }
+
+    pickingSlot?.let { slot ->
+        GearPicker(hero, slot, state, vm, onDismiss = { pickingSlot = null })
+    }
 }
 
-private fun classBlurb(hero: Hero): String = when (hero.heroClass) {
-    com.todorpg.app.data.HeroClass.KNIGHT -> "steady, strong hits"
-    com.todorpg.app.data.HeroClass.MONK -> "fast flurry of blows"
-    com.todorpg.app.data.HeroClass.RANGER -> "high critical chance"
-    com.todorpg.app.data.HeroClass.MAGE -> "big magic damage"
-    com.todorpg.app.data.HeroClass.CLERIC -> "weak hits, heals allies"
+@Composable
+private fun GearPicker(hero: Hero, slot: GearSlot, state: GameState, vm: GameViewModel, onDismiss: () -> Unit) {
+    val current = hero.gear[slot]
+    val options = state.inventory.filter { it.slot == slot }
+        .sortedByDescending { it.atk * 2 + it.def * 2 + it.hp / 2 }
+    RpgDialog("${hero.name}: ${slot.label}", onDismiss) {
+        if (current != null) {
+            Text("Equipped: ${current.name} (${current.statLine})", style = MaterialTheme.typography.bodySmall, color = Color(current.rarity.color))
+            MenuButton("Unequip") {
+                vm.unequip(hero.id, slot)
+                onDismiss()
+            }
+        }
+        if (options.isEmpty()) {
+            Text(
+                "No ${slot.label.lowercase()}s in your bag. Defeat monsters to find gear!",
+                Modifier.padding(vertical = 8.dp),
+                style = MaterialTheme.typography.bodySmall,
+                color = RpgColors.Dim,
+            )
+        }
+        options.forEach { g ->
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable {
+                        vm.equip(hero.id, g.id)
+                        onDismiss()
+                    }
+                    .padding(vertical = 6.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                GearIcon(g)
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(g.name, style = MaterialTheme.typography.bodySmall, color = Color(g.rarity.color))
+                    Text(diff(current, g), style = MaterialTheme.typography.labelSmall)
+                }
+            }
+        }
+        Spacer(Modifier.height(8.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            RpgButton("Back", onClick = onDismiss)
+        }
+    }
+}
+
+/** e.g. "ATK+5 (+2)  HP+10 (-4)" comparing against what's equipped. */
+private fun diff(current: Equipment?, g: Equipment): String {
+    fun part(label: String, new: Int, old: Int): String? {
+        if (new == 0 && old == 0) return null
+        val d = new - old
+        val sign = if (d >= 0) "+$d" else "$d"
+        return "$label $new ($sign)"
+    }
+    return listOfNotNull(
+        part("ATK", g.atk, current?.atk ?: 0),
+        part("DEF", g.def, current?.def ?: 0),
+        part("HP", g.hp, current?.hp ?: 0),
+    ).joinToString("  ")
+}
+
+@Composable
+private fun RecruitDialog(vm: GameViewModel, onDismiss: () -> Unit) {
+    var heroClass by remember { mutableStateOf(HeroClass.BARD) }
+    var name by remember { mutableStateOf("") }
+    var category by remember { mutableStateOf("") }
+
+    RpgDialog("Recruit", onDismiss) {
+        Label("Class")
+        HeroClass.entries.chunked(4).forEach { row ->
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
+                row.forEach { c ->
+                    val selected = c == heroClass
+                    Column(
+                        Modifier
+                            .clip(RoundedCornerShape(4.dp))
+                            .border(2.dp, if (selected) RpgColors.Gold else Color.Transparent, RoundedCornerShape(4.dp))
+                            .clickable { vm.click(); heroClass = c }
+                            .padding(4.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                    ) {
+                        PixelSprite(Sprites.hero(c), Modifier.size(44.dp), animate = selected, frameMs = 300)
+                        Text(c.title, style = MaterialTheme.typography.labelSmall)
+                    }
+                }
+            }
+        }
+        Text(
+            "${heroClass.skill}: ${heroClass.blurb}",
+            Modifier.padding(top = 6.dp),
+            style = MaterialTheme.typography.labelMedium,
+            color = RpgColors.Gold,
+        )
+        Label("Name")
+        RpgTextField(name, { name = it }, placeholder = "e.g. Lyra")
+        Label("Category")
+        RpgTextField(category, { category = it }, placeholder = "e.g. Creative, Money, Pets")
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+            RpgButton("Cancel", onClick = onDismiss)
+            RpgButton("Recruit", enabled = name.isNotBlank() && category.isNotBlank()) {
+                vm.recruit(heroClass, name, category)
+                onDismiss()
+            }
+        }
+    }
 }

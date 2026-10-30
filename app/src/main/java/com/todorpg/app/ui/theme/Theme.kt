@@ -5,10 +5,14 @@ import androidx.compose.material3.Typography
 import androidx.compose.material3.darkColorScheme
 import androidx.compose.runtime.Composable
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.Shadow
+import androidx.compose.ui.geometry.Offset
 import androidx.compose.ui.text.TextStyle
+import androidx.compose.ui.text.font.Font
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
+import com.todorpg.app.R
 
 object RpgColors {
     val Night = Color(0xFF080A20)
@@ -27,13 +31,31 @@ object RpgColors {
     val Disabled = Color(0xFF606888)
 }
 
-val PixelFont = FontFamily.Monospace
+/** Readable pixel font for body text. */
+val PixelFont = FontFamily(
+    Font(R.font.pixelify_sans, FontWeight.Normal),
+    Font(R.font.pixelify_sans_semibold, FontWeight.Bold),
+)
 
-private fun style(size: Int) = TextStyle(
+/** Chunky 8-bit font for headings and numbers. */
+val HeadingFont = FontFamily(Font(R.font.press_start_2p))
+
+private val TextShadow = Shadow(Color(0xC0000000), Offset(2f, 2f), 0f)
+
+private fun body(size: Int, weight: FontWeight = FontWeight.Normal) = TextStyle(
     fontFamily = PixelFont,
-    fontWeight = FontWeight.Bold,
+    fontWeight = weight,
     fontSize = size.sp,
     color = RpgColors.Text,
+    shadow = TextShadow,
+)
+
+private fun heading(size: Int) = TextStyle(
+    fontFamily = HeadingFont,
+    fontSize = size.sp,
+    lineHeight = (size + 6).sp,
+    color = RpgColors.Text,
+    shadow = TextShadow,
 )
 
 @Composable
@@ -48,14 +70,16 @@ fun ToDoRpgTheme(content: @Composable () -> Unit) {
             onBackground = RpgColors.Text,
         ),
         typography = Typography(
-            bodyLarge = style(16),
-            bodyMedium = style(14),
-            bodySmall = style(12),
-            titleLarge = style(20),
-            titleMedium = style(16),
-            labelLarge = style(14),
-            labelMedium = style(12),
-            labelSmall = style(10),
+            bodyLarge = body(18),
+            bodyMedium = body(16),
+            bodySmall = body(14),
+            titleLarge = heading(16),
+            titleMedium = heading(12),
+            titleSmall = heading(10),
+            labelLarge = body(16, FontWeight.Bold),
+            labelMedium = body(14),
+            labelSmall = body(12),
+            displaySmall = heading(22),
         ),
         content = content,
     )

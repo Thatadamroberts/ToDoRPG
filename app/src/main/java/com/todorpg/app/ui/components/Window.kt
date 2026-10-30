@@ -1,5 +1,10 @@
 package com.todorpg.app.ui.components
 
+import androidx.compose.animation.core.Animatable
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateFloatAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -8,28 +13,37 @@ import androidx.compose.foundation.layout.Box
 import androidx.compose.foundation.layout.Column
 import androidx.compose.foundation.layout.ColumnScope
 import androidx.compose.foundation.layout.Row
+import androidx.compose.foundation.layout.Spacer
 import androidx.compose.foundation.layout.fillMaxWidth
 import androidx.compose.foundation.layout.height
+import androidx.compose.foundation.layout.offset
 import androidx.compose.foundation.layout.padding
 import androidx.compose.foundation.layout.size
 import androidx.compose.foundation.rememberScrollState
-import androidx.compose.foundation.verticalScroll
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.BasicTextField
+import androidx.compose.foundation.verticalScroll
 import androidx.compose.material3.MaterialTheme
 import androidx.compose.material3.Text
 import androidx.compose.runtime.Composable
+import androidx.compose.runtime.LaunchedEffect
+import androidx.compose.runtime.getValue
+import androidx.compose.runtime.remember
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.SolidColor
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.Dp
+import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.window.Dialog
 import com.todorpg.app.ui.theme.RpgColors
+import kotlin.math.roundToInt
+import kotlin.math.sin
 
 private val WindowShape = RoundedCornerShape(6.dp)
 
@@ -52,7 +66,19 @@ fun RpgWindow(
     )
 }
 
-/** A menu entry with the pointing-hand cursor when selected. */
+/** The pointing-hand cursor, gently bobbing side to side. */
+@Composable
+fun Cursor(visible: Boolean, modifier: Modifier = Modifier) {
+    val clock = LocalClock.current
+    Text(
+        if (visible) "▶" else " ",
+        modifier.offset { IntOffset(if (visible) (sin(clock.value / 140.0) * 3).roundToInt() else 0, 0) },
+        color = RpgColors.Gold,
+        style = MaterialTheme.typography.bodyMedium,
+    )
+}
+
+/** A menu entry with the cursor when selected. */
 @Composable
 fun MenuButton(
     text: String,
@@ -68,11 +94,7 @@ fun MenuButton(
             .padding(horizontal = 6.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
     ) {
-        Text(
-            if (selected) "▶" else " ",
-            color = RpgColors.Gold,
-            style = MaterialTheme.typography.bodyMedium,
-        )
+        Cursor(selected)
         Text(
             text,
             color = if (enabled) RpgColors.Text else RpgColors.Disabled,
@@ -108,7 +130,7 @@ fun RpgButton(
     }
 }
 
-/** HP / EXP style bar. */
+/** HP / EXP style bar that slides smoothly when the value changes. */
 @Composable
 fun StatBar(
     value: Int,
@@ -117,7 +139,8 @@ fun StatBar(
     modifier: Modifier = Modifier,
     height: Dp = 6.dp,
 ) {
-    val fraction = if (max <= 0) 0f else (value.toFloat() / max).coerceIn(0f, 1f)
+    val target = if (max <= 0) 0f else (value.toFloat() / max).coerceIn(0f, 1f)
+    val fraction by animateFloatAsState(target, tween(500), label = "bar")
     Box(
         modifier
             .height(height)
@@ -139,20 +162,23 @@ fun hpColor(hp: Int, max: Int): Color = when {
     else -> RpgColors.Hp
 }
 
-/** Little orange pips showing banked battle turns. */
+/** Little orange pips showing banked battle turns; they pulse when available. */
 @Composable
 fun ChargePips(count: Int, modifier: Modifier = Modifier) {
+    val clock = LocalClock.current
     Row(modifier, horizontalArrangement = Arrangement.spacedBy(2.dp)) {
-        repeat(count.coerceAtMost(9)) {
+        repeat(count.coerceAtMost(9)) { i ->
             Box(
                 Modifier
                     .size(width = 5.dp, height = 8.dp)
+                    .graphicsLayer { alpha = 0.65f + 0.35f * sin(clock.value / 250.0 - i * 0.6).toFloat() }
                     .background(RpgColors.Charge)
             )
         }
     }
 }
 
+/** A dialog in a menu window that pops open. */
 @Composable
 fun RpgDialog(
     title: String,
@@ -160,9 +186,20 @@ fun RpgDialog(
     content: @Composable ColumnScope.() -> Unit,
 ) {
     Dialog(onDismissRequest = onDismiss) {
-        RpgWindow(Modifier.fillMaxWidth().verticalScroll(rememberScrollState()), padding = 14.dp) {
+        val scale = remember { Animatable(0.6f) }
+        LaunchedEffect(Unit) { scale.animateTo(1f, spring(dampingRatio = 0.6f, stiffness = Spring.StiffnessMediumLow)) }
+        RpgWindow(
+            Modifier
+                .graphicsLayer {
+                    scaleX = scale.value
+                    scaleY = scale.value
+                }
+                .fillMaxWidth()
+                .verticalScroll(rememberScrollState()),
+            padding = 14.dp,
+        ) {
             Text(title, style = MaterialTheme.typography.titleMedium, color = RpgColors.Gold)
-            androidx.compose.foundation.layout.Spacer(Modifier.height(10.dp))
+            Spacer(Modifier.height(10.dp))
             content()
         }
     }
@@ -189,9 +226,14 @@ fun RpgTextField(
             value = value,
             onValueChange = onValueChange,
             singleLine = true,
-            textStyle = MaterialTheme.typography.bodyMedium.copy(color = RpgColors.Text),
+            textStyle = MaterialTheme.typography.bodyMedium.copy(color = RpgColors.Text, shadow = null),
             cursorBrush = SolidColor(RpgColors.Gold),
             modifier = Modifier.fillMaxWidth(),
         )
     }
+}
+
+@Composable
+fun SectionTitle(text: String, modifier: Modifier = Modifier) {
+    Text(text, modifier.padding(bottom = 4.dp), style = MaterialTheme.typography.titleMedium, color = RpgColors.Gold)
 }
