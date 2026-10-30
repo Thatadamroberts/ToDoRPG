@@ -5,7 +5,6 @@ import com.todorpg.app.data.GameState
 import com.todorpg.app.data.Item
 import com.todorpg.app.data.Rules
 import com.todorpg.app.data.TaskType
-import kotlinx.serialization.encodeToString
 import kotlinx.serialization.json.Json
 import org.junit.Assert.assertEquals
 import org.junit.Assert.assertNotNull
@@ -128,7 +127,7 @@ class GameEngineTest {
     @Test
     fun stateRoundTripsThroughJson() {
         val (s, _) = GameEngine.completeTask(withTask(TaskType.DAILY), 1, day)
-        val json = Json.encodeToString(s)
-        assertEquals(s, Json.decodeFromString<GameState>(json))
+        val json = Json.encodeToString(GameState.serializer(), s)
+        assertEquals(s, Json.decodeFromString(GameState.serializer(), json))
     }
 }

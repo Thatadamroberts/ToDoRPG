@@ -256,7 +256,7 @@ fun PixelSprite(
 ) {
     val (grid, palette) = sprite
     val pixels = remember(grid, palette, grayscale, flash) {
-        buildList {
+        buildList<Triple<Int, Int, Color>> {
             grid.forEachIndexed { y, row ->
                 row.forEachIndexed { x, ch ->
                     val c = palette[ch] ?: return@forEachIndexed

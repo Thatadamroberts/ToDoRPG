@@ -11,7 +11,7 @@ class GameRepository(private val file: File) {
     }
 
     fun load(): GameState? = try {
-        if (file.exists()) json.decodeFromString<GameState>(file.readText()) else null
+        if (file.exists()) json.decodeFromString(GameState.serializer(), file.readText()) else null
     } catch (e: Exception) {
         // Keep a copy of the unreadable save rather than silently losing it.
         file.copyTo(File(file.parentFile, file.name + ".bad"), overwrite = true)
