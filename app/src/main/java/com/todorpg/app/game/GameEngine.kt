@@ -1,6 +1,9 @@
 package com.todorpg.app.game
 
 import com.todorpg.app.data.Difficulty
+import com.todorpg.app.data.Element
+import com.todorpg.app.data.Intent
+import com.todorpg.app.data.IntentType
 import com.todorpg.app.data.Equipment
 import com.todorpg.app.data.GameState
 import com.todorpg.app.data.GearSlot
@@ -18,22 +21,45 @@ import com.todorpg.app.data.TaskType
 import kotlin.math.roundToInt
 import kotlin.random.Random
 
-/** Result of a hero attacking, used by the battle screen to animate. */
-data class AttackResult(
+enum class ActionKind { ATTACK, SKILL, GUARD, ITEM }
+
+/** What the player asked a hero to do. [target] is the hero an item or skill is aimed at. */
+data class Command(val kind: ActionKind, val item: Item? = null, val target: Int? = null)
+
+/** Battle events, in order, for the battle screen to animate. */
+sealed interface BattleEvent
+
+data class HeroEvent(
     val heroId: Int,
     val heroClass: HeroClass,
-    val damage: Int,
-    val critical: Boolean,
-    val raid: Boolean = false,
-    val healedHeroIds: List<Int> = emptyList(),
-    /** The monster as it was when it fell, if this attack finished it off. */
-    val defeated: Monster? = null,
-    val goldGained: Int = 0,
-    val loot: Equipment? = null,
-    val levelUps: List<Int> = emptyList(),
-) {
-    val killed: Boolean get() = defeated != null
+    val kind: ActionKind,
+    val element: Element?,
+    val hits: List<Int> = emptyList(),
+    val critical: Boolean = false,
+    val weak: Boolean = false,
+    val resisted: Boolean = false,
+    val broke: Boolean = false,
+    val healed: List<Int> = emptyList(),
+    val revived: List<Int> = emptyList(),
+    val item: Item? = null,
+) : BattleEvent {
+    val total: Int get() = hits.sum()
 }
+
+data class MonsterEvent(
+    val intent: IntentType,
+    val damage: Map<Int, Int>,
+    val guarded: Set<Int>,
+    val knockedOut: List<Int>,
+) : BattleEvent
+
+data class VictoryEvent(
+    val monster: Monster,
+    val raid: Boolean,
+    val gold: Int,
+    val loot: Equipment?,
+    val levelUps: List<Int>,
+) : BattleEvent
 
 /** Short feedback shown after an action, e.g. "+20 EXP  +10 G". */
 data class Reward(val text: String, val heroId: Int, val levelUp: Boolean = false)
@@ -53,7 +79,7 @@ object GameEngine {
                 Hero(3, HeroClass.MAGE, "Vivi", "Learning"),
                 Hero(4, HeroClass.CLERIC, "Rosa", "Social"),
             ),
-            monster = spawnMonster(1),
+            monster = spawnMonster(1).copy(intent = Intent(IntentType.STRIKE, 0)),
             lastDay = today,
             log = listOf("Your party sets out. Finish quests to earn turns in battle!"),
         )
@@ -83,6 +109,8 @@ object GameEngine {
             isBoss = isBoss,
             goldReward = (20 + floor * 8) * if (isBoss) 3 else 1,
             expReward = (10 + floor * 4) * if (isBoss) 3 else 1,
+            speed = if (isBoss) 2 else 3,
+            breakMax = if (isBoss) 10 else 6,
         )
     }
 
@@ -101,10 +129,12 @@ object GameEngine {
                 tier = ((week / 2) % 4).toInt(),
                 hp = hp,
                 maxHp = hp,
-                attack = 0,
+                attack = 4 + avgLevel * 3,
                 isBoss = true,
                 goldReward = 150 + state.floor * 10,
                 expReward = 60 + avgLevel * 15,
+                speed = 2,
+                breakMax = 12,
             ),
         )
     }
@@ -154,7 +184,10 @@ object GameEngine {
         // Nightly rest: living heroes recover 10% max HP per day (up to 3 days).
         val restDays = minOf(today - last, Rules.MISSED_DAYS_CAP.toLong()).toInt()
         heroes = heroes.map { h ->
-            if (h.isKo) h else h.copy(hp = minOf(h.maxHp, h.hp + h.maxHp * restDays / 10))
+            if (h.isKo) h else h.copy(
+                hp = minOf(h.maxHp, h.hp + h.maxHp * restDays / 10),
+                mp = minOf(h.maxMp, h.mp + h.maxMp * restDays * 3 / 10),
+            )
         }
         log += "A new day dawns. The party rests at camp."
 
@@ -216,7 +249,10 @@ object GameEngine {
         // KO'd heroes still learn, just slower.
         val earnedExp = if (hero.isKo) exp / 2 else exp
         val (leveled, levels) = gainExp(hero, earnedExp)
-        val charged = leveled.copy(charges = minOf(Rules.MAX_CHARGES, leveled.charges + Rules.chargesFor(task.difficulty)))
+        val charged = leveled.copy(
+            charges = minOf(Rules.MAX_CHARGES, leveled.charges + Rules.chargesFor(task.difficulty)),
+            mp = minOf(leveled.maxMp, leveled.mp + Rules.MP_PER_TASK),
+        )
 
         val updatedTask = task.copy(lastCompletedDay = today, streak = newStreak)
         val log = mutableListOf("${hero.name} completed \"${task.title}\".")
@@ -257,92 +293,263 @@ object GameEngine {
             levels++
         }
         val leveled = hero.copy(level = level, exp = exp)
-        return (if (levels > 0) leveled.copy(hp = leveled.maxHp) else leveled) to levels
+        return (if (levels > 0) leveled.copy(hp = leveled.maxHp, mp = leveled.maxMp) else leveled) to levels
     }
 
     // endregion
 
     // region Battle
 
-    /** Attack the floor monster, or the raid boss when [raid] is true. */
-    fun attack(state: GameState, heroId: Int, raid: Boolean = false, rng: Random = Random.Default): Pair<GameState, AttackResult?> {
-        val hero = state.hero(heroId) ?: return state to null
-        if (hero.isKo || hero.charges <= 0) return state to null
-        val target = if (raid) {
-            val r = state.raid ?: return state to null
-            if (r.defeated || !state.raidUnsealed()) return state to null
-            r.boss
-        } else state.monster
-        if (target.hp <= 0) return state to null
+    private fun pickIntent(m: Monster, heroes: List<Hero>, rng: Random): Intent {
+        val alive = heroes.filter { !it.isKo }
+        val roll = rng.nextDouble()
+        val type = when {
+            m.isBoss && roll < 0.25 -> IntentType.SWEEP
+            (m.isBoss || m.floor >= 3) && roll > 0.7 -> IntentType.HEAVY
+            else -> IntentType.STRIKE
+        }
+        val target = if (type == IntentType.SWEEP || alive.isEmpty()) null else alive[rng.nextInt(alive.size)].id
+        return Intent(type, target)
+    }
 
+    /** Gives a monster from an older save (or a fresh one) its first intent. */
+    fun withIntent(m: Monster, heroes: List<Hero>, rng: Random = Random.Default): Monster =
+        if (m.intent != null) m else m.copy(intent = pickIntent(m, heroes, rng))
+
+    fun canAct(state: GameState, hero: Hero, cmd: Command): Boolean = when (cmd.kind) {
+        ActionKind.ITEM -> cmd.item != null && cmd.target != null && GameEngine.useItem(state, cmd.item, cmd.target) != null
+        ActionKind.SKILL -> !hero.isKo && hero.charges > 0 && hero.mp >= hero.heroClass.skillCost &&
+            (hero.heroClass != HeroClass.DRUID || state.heroes.any { it.isKo || it.hp < it.maxHp })
+        else -> !hero.isKo && hero.charges > 0
+    }
+
+    /**
+     * One hero action against the floor monster (or the raid boss when [raid]).
+     * Returns the new state plus the events to animate, or null if not allowed.
+     * Attacks, skills and guards cost a battle turn and advance the monster's clock;
+     * items are free.
+     */
+    fun act(
+        state: GameState,
+        heroId: Int,
+        cmd: Command,
+        raid: Boolean = false,
+        rng: Random = Random.Default,
+    ): Pair<GameState, List<BattleEvent>>? {
+        val hero = state.hero(heroId) ?: return null
+        val raidState = state.raid
+        if (raid && (raidState == null || raidState.defeated || !state.raidUnsealed())) return null
+        val baseTarget = if (raid) raidState!!.boss else state.monster
+        if (baseTarget.hp <= 0 || !canAct(state, hero, cmd)) return null
+
+        if (cmd.kind == ActionKind.ITEM) {
+            val next = useItem(state, cmd.item!!, cmd.target!!) ?: return null
+            return next to listOf(HeroEvent(cmd.target, next.hero(cmd.target)!!.heroClass, ActionKind.ITEM, null, item = cmd.item, healed = listOf(cmd.target)))
+        }
+
+        var target = withIntent(baseTarget, state.heroes, rng)
+        var heroes = state.heroes
+        val log = mutableListOf<String>()
+        var inspired = state.inspired
+        var knownWeak = state.knownWeak
         val c = hero.heroClass
-        val roll = 0.85 + rng.nextDouble() * 0.3
-        val critChance = when (c) {
+
+        fun setHero(h: Hero) {
+            heroes = heroes.map { if (it.id == h.id) h else it }
+        }
+
+        fun current(id: Int) = heroes.first { it.id == id }
+
+        // Pay for the action.
+        setHero(
+            hero.copy(
+                charges = hero.charges - 1,
+                mp = if (cmd.kind == ActionKind.SKILL) hero.mp - c.skillCost
+                else if (cmd.kind == ActionKind.GUARD) minOf(hero.maxMp, hero.mp + 3) else hero.mp,
+                guarding = cmd.kind == ActionKind.GUARD || hero.guarding,
+            )
+        )
+
+        var event = HeroEvent(hero.id, c, cmd.kind, null)
+
+        fun strike(mult: Double, element: Element, critChance: Double, forceCrit: Boolean = false): Int {
+            val critical = forceCrit || rng.nextDouble() < critChance
+            val weak = element in target.weak
+            val resisted = element in target.resist
+            val inspiredNow = inspired && c != HeroClass.BARD
+            if (inspiredNow) inspired = false
+            val roll = 0.85 + rng.nextDouble() * 0.3
+            val dmg = (hero.attack * mult * roll *
+                (if (critical) 2.0 else 1.0) *
+                (if (inspiredNow) 1.5 else 1.0) *
+                (if (weak) 1.5 else if (resisted) 0.5 else 1.0) *
+                (if (target.broken > 0) 1.5 else 1.0)).roundToInt().coerceAtLeast(1)
+            var gauge = target.breakGauge
+            var broken = target.broken
+            var broke = false
+            if (weak && broken == 0) {
+                gauge += if (critical) 3 else 2
+                if (!state.knownWeak[target.kind].orEmpty().contains(element)) {
+                    knownWeak = knownWeak + (target.kind to (knownWeak[target.kind].orEmpty() + element))
+                }
+                if (gauge >= target.breakMax) {
+                    gauge = 0
+                    broken = Rules.BROKEN_TURNS
+                    broke = true
+                    log += "${target.name} is BROKEN!"
+                }
+            }
+            target = target.copy(hp = (target.hp - dmg).coerceAtLeast(0), breakGauge = gauge, broken = broken, counter = if (broke) 0 else target.counter)
+            event = event.copy(
+                element = element,
+                hits = event.hits + dmg,
+                critical = event.critical || critical,
+                weak = event.weak || weak,
+                resisted = event.resisted || resisted,
+                broke = event.broke || broke,
+            )
+            return dmg
+        }
+
+        fun healHero(id: Int, amount: Int) {
+            val h = current(id)
+            if (h.isKo) return
+            setHero(h.copy(hp = minOf(h.maxHp, h.hp + amount)))
+            event = event.copy(healed = event.healed + id)
+        }
+
+        val baseCrit = when (c) {
             HeroClass.RANGER -> 0.30
             HeroClass.SAMURAI -> 0.20
             else -> 0.10
         }
-        val critical = rng.nextDouble() < critChance
-        val classMult = when (c) {
-            HeroClass.KNIGHT -> 1.2
-            HeroClass.MONK -> 1.1
-            HeroClass.RANGER -> 1.0
-            HeroClass.MAGE -> 1.5
-            HeroClass.CLERIC -> 0.6
-            HeroClass.BARD -> 0.7
-            HeroClass.SAMURAI -> 1.35
-            HeroClass.DRUID -> 0.8
-        }
-        val inspiredNow = state.inspired && c != HeroClass.BARD
-        val damage = (hero.attack * classMult * roll * (if (critical) 2.0 else 1.0) * (if (inspiredNow) 1.5 else 1.0))
-            .roundToInt().coerceAtLeast(1)
-
-        var heroes = state.heroes.replace(hero.copy(charges = hero.charges - 1))
-        val log = mutableListOf(
-            "${hero.name} uses ${c.skill}! ${if (critical) "Critical! " else ""}$damage damage."
-        )
-        var inspired = if (inspiredNow) false else state.inspired
-
-        val healed = mutableListOf<Int>()
-        when (c) {
-            HeroClass.CLERIC -> {
-                val t = heroes.filter { !it.isKo && it.hp < it.maxHp }.minByOrNull { it.hp.toFloat() / it.maxHp }
-                if (t != null) {
-                    val amount = t.maxHp / 4
-                    heroes = heroes.replace(t.copy(hp = minOf(t.maxHp, t.hp + amount)))
-                    healed += t.id
-                    log += "${t.name} recovers $amount HP."
+        when (cmd.kind) {
+            ActionKind.GUARD -> log += "${hero.name} takes a defensive stance."
+            ActionKind.ATTACK -> {
+                val mult = when (c) {
+                    HeroClass.KNIGHT -> 1.2
+                    HeroClass.MONK -> 1.1
+                    HeroClass.RANGER -> 1.0
+                    HeroClass.MAGE -> 1.5
+                    HeroClass.CLERIC -> 0.6
+                    HeroClass.BARD -> 0.7
+                    HeroClass.SAMURAI -> 1.35
+                    HeroClass.DRUID -> 0.8
+                }
+                val dmg = strike(mult, c.element, baseCrit)
+                log += "${hero.name} uses ${c.attackName}! $dmg damage."
+                when (c) {
+                    HeroClass.CLERIC -> heroes.filter { !it.isKo && it.hp < it.maxHp }
+                        .minByOrNull { it.hp.toFloat() / it.maxHp }?.let { healHero(it.id, it.maxHp / 4) }
+                    HeroClass.DRUID -> heroes.filter { !it.isKo && it.hp < it.maxHp }.forEach { healHero(it.id, it.maxHp / 10) }
+                    HeroClass.BARD -> {
+                        inspired = true
+                        log += "The party feels inspired!"
+                    }
+                    else -> Unit
                 }
             }
-            HeroClass.DRUID -> {
-                heroes = heroes.map { h ->
-                    if (h.isKo || h.hp >= h.maxHp) h else {
-                        healed += h.id
-                        h.copy(hp = minOf(h.maxHp, h.hp + h.maxHp / 10))
+            ActionKind.SKILL -> {
+                log += "${hero.name} uses ${c.skill}!"
+                when (c) {
+                    HeroClass.KNIGHT -> strike(2.0, Element.SLASH, baseCrit)
+                    HeroClass.MONK -> {
+                        strike(1.2, Element.BLUNT, baseCrit)
+                        healHero(hero.id, hero.maxHp * 3 / 10)
+                    }
+                    HeroClass.RANGER -> repeat(3) { if (target.hp > 0) strike(0.7, Element.PIERCE, baseCrit) }
+                    HeroClass.MAGE -> strike(2.2, Element.ICE, baseCrit)
+                    HeroClass.CLERIC -> heroes.filter { !it.isKo }.forEach { healHero(it.id, it.maxHp * 3 / 10) }
+                    HeroClass.BARD -> {
+                        strike(0.5, Element.SOUND, 0.0)
+                        target = target.copy(counter = 0)
+                        log += "${target.name} grows drowsy..."
+                    }
+                    HeroClass.SAMURAI -> strike(1.35, Element.SLASH, 1.0, forceCrit = true)
+                    HeroClass.DRUID -> {
+                        val fallen = heroes.firstOrNull { it.isKo }
+                        if (fallen != null) {
+                            setHero(fallen.copy(hp = fallen.maxHp * 4 / 10))
+                            event = event.copy(revived = listOf(fallen.id))
+                            log += "${fallen.name} is revived!"
+                        } else {
+                            heroes.filter { !it.isKo && it.hp < it.maxHp }
+                                .minByOrNull { it.hp.toFloat() / it.maxHp }?.let { healHero(it.id, it.maxHp / 2) }
+                        }
                     }
                 }
-                if (healed.isNotEmpty()) log += "Soothing vines heal the party."
+                if (event.total > 0) log += "${event.total} damage" + if (event.hits.size > 1) " in ${event.hits.size} hits." else "."
             }
-            HeroClass.BARD -> {
-                inspired = true
-                log += "The party feels inspired!"
-            }
-            else -> Unit
+            ActionKind.ITEM -> Unit
         }
+        if (event.weak) log += "It's super effective!"
 
-        val remaining = (target.hp - damage).coerceAtLeast(0)
-        var next = state.copy(heroes = heroes, inspired = inspired)
-        next = if (raid) next.copy(raid = next.raid!!.copy(boss = target.copy(hp = remaining)))
-        else next.copy(monster = target.copy(hp = remaining))
+        val events = mutableListOf<BattleEvent>(event)
+        var next = state.copy(heroes = heroes, inspired = inspired, knownWeak = knownWeak)
+        next = if (raid) next.copy(raid = next.raid!!.copy(boss = target)) else next.copy(monster = target)
 
-        var result = AttackResult(hero.id, c, damage, critical, raid = raid, healedHeroIds = healed)
-        if (remaining == 0) {
-            val (afterWin, win) = defeat(next, target.copy(hp = 0), raid, log, rng)
+        if (target.hp == 0) {
+            val (afterWin, win) = defeat(next, target, raid, log, rng)
             next = afterWin
-            result = result.copy(defeated = target.copy(hp = 0), goldGained = win.first, loot = win.second, levelUps = win.third)
+            events += VictoryEvent(target, raid, win.first, win.second, win.third)
+        } else if (!event.broke) {
+            // The hit that breaks a monster doesn't also count down its stun.
+            val (afterTurn, monsterEvent) = monsterTurn(next, target, raid, log, rng)
+            next = afterTurn
+            monsterEvent?.let { events += it }
         }
-        next = next.copy(log = (next.log + log).takeLast(Rules.MAX_LOG))
-        return next to result
+        return next.copy(log = (next.log + log).takeLast(Rules.MAX_LOG)) to events
+    }
+
+    /** Advances the monster's clock by one hero action, and lets it act when ready. */
+    private fun monsterTurn(
+        state: GameState,
+        target: Monster,
+        raid: Boolean,
+        log: MutableList<String>,
+        rng: Random,
+    ): Pair<GameState, MonsterEvent?> {
+        fun withTarget(s: GameState, m: Monster) =
+            if (raid) s.copy(raid = s.raid!!.copy(boss = m)) else s.copy(monster = m)
+
+        if (target.broken > 0) {
+            val m = target.copy(broken = target.broken - 1)
+            if (m.broken == 0) log += "${m.name} recovers!"
+            return withTarget(state, m) to null
+        }
+        val counter = target.counter + 1
+        if (counter < target.speed) return withTarget(state, target.copy(counter = counter)) to null
+
+        val intent = target.intent ?: pickIntent(target, state.heroes, rng)
+        val alive = state.heroes.filter { !it.isKo }
+        val victims = when {
+            alive.isEmpty() -> emptyList()
+            intent.type == IntentType.SWEEP -> alive
+            else -> listOf(alive.firstOrNull { it.id == intent.targetId } ?: alive[rng.nextInt(alive.size)])
+        }
+        val damage = mutableMapOf<Int, Int>()
+        val guarded = mutableSetOf<Int>()
+        val kos = mutableListOf<Int>()
+        val heroes = state.heroes.map { h ->
+            if (victims.none { it.id == h.id }) return@map h.copy(guarding = false)
+            var dmg = (target.attack * intent.type.mult * (0.9 + rng.nextDouble() * 0.2)).roundToInt() - h.defense / 2
+            if (h.guarding) {
+                dmg /= 2
+                guarded += h.id
+            }
+            dmg = dmg.coerceAtLeast(1)
+            damage[h.id] = dmg
+            val hp = (h.hp - dmg).coerceAtLeast(0)
+            if (hp == 0) kos += h.id
+            h.copy(hp = hp, guarding = false)
+        }
+        log += when (intent.type) {
+            IntentType.SWEEP -> "${target.name} sweeps the party!"
+            else -> "${target.name} uses ${intent.type.label} on ${victims.firstOrNull()?.name ?: "nobody"}!"
+        }
+        kos.forEach { id -> log += "${heroes.first { it.id == id }.name} is KO'd!" }
+        val m = target.copy(counter = 0, intent = pickIntent(target, heroes, rng))
+        return withTarget(state.copy(heroes = heroes), m) to MonsterEvent(intent.type, damage, guarded, kos)
     }
 
     private fun defeat(
@@ -355,8 +562,8 @@ object GameEngine {
         log += "${m.name} is defeated! +${m.goldReward} G, +${m.expReward} EXP each."
         val levelUps = mutableListOf<Int>()
         val heroes = state.heroes.map { h ->
-            if (h.isKo) h else {
-                val (up, levels) = gainExp(h, m.expReward)
+            if (h.isKo) h.copy(guarding = false) else {
+                val (up, levels) = gainExp(h.copy(guarding = false), m.expReward)
                 if (levels > 0) {
                     log += "${h.name} reached level ${up.level}!"
                     levelUps += h.id
@@ -368,7 +575,7 @@ object GameEngine {
 
         // Consumable drops.
         if (!raid && rng.nextDouble() < if (m.isBoss) 1.0 else 0.25) {
-            val drop = if (m.isBoss) Item.ELIXIR else Item.POTION
+            val drop = if (m.isBoss) Item.ELIXIR else if (rng.nextBoolean()) Item.POTION else Item.ETHER
             next = next.copy(items = next.items + (drop to next.itemCount(drop) + 1))
             log += "Found a ${drop.label}!"
         }
@@ -390,7 +597,7 @@ object GameEngine {
             next.copy(raid = next.raid!!.copy(defeated = true), raidsDefeated = next.raidsDefeated + 1)
         } else {
             val floor = next.floor + 1
-            val monster = spawnMonster(floor)
+            val monster = withIntent(spawnMonster(floor), next.heroes, rng)
             log += "Floor $floor: a ${monster.name} appears!"
             next.copy(floor = floor, monster = monster, monstersDefeated = next.monstersDefeated + 1)
         }
@@ -506,11 +713,16 @@ object GameEngine {
                 state.heroes.replace(hero.copy(hp = hero.maxHp / 2))
             }
             Item.ELIXIR -> state.heroes.map { it.copy(hp = it.maxHp) }
+            Item.ETHER -> {
+                if (hero.isKo || hero.mp >= hero.maxMp) return null
+                state.heroes.replace(hero.copy(mp = minOf(hero.maxMp, hero.mp + Rules.ETHER_MP)))
+            }
         }
         val msg = when (item) {
             Item.ELIXIR -> "The party is fully restored!"
             Item.FEATHER -> "${hero.name} is revived!"
             Item.POTION -> "${hero.name} recovers HP."
+            Item.ETHER -> "${hero.name} recovers MP."
         }
         return state.copy(
             heroes = heroes,

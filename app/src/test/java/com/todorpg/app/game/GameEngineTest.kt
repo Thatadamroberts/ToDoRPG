@@ -1,6 +1,8 @@
 package com.todorpg.app.game
 
 import com.todorpg.app.data.Difficulty
+import com.todorpg.app.data.Element
+import com.todorpg.app.data.IntentType
 import com.todorpg.app.data.GameState
 import com.todorpg.app.data.GearSlot
 import com.todorpg.app.data.HeroClass
@@ -17,6 +19,7 @@ import org.junit.Test
 import kotlin.random.Random
 
 class GameEngineTest {
+    private val ATTACK = Command(ActionKind.ATTACK)
     private val day = 20_000L
 
     private fun withTask(type: TaskType, difficulty: Difficulty = Difficulty.NORMAL, heroId: Int = 0): GameState =
@@ -91,15 +94,15 @@ class GameEngineTest {
     @Test
     fun attackNeedsChargeAndKillsAdvanceFloor() {
         var s = GameEngine.newGame(day)
-        assertNull(GameEngine.attack(s, 0).second)
+        assertNull(GameEngine.act(s, 0, ATTACK))
 
-        s = s.copy(heroes = s.heroes.map { it.copy(charges = 9, weapon = 10) })
+        s = s.copy(heroes = s.heroes.map { it.copy(charges = 9, weapon = 10, hp = 500) })
         var killed = false
         repeat(20) {
             if (!killed) {
-                val (n, r) = GameEngine.attack(s, 3, rng = Random(it))
+                val (n, events) = GameEngine.act(s, 3, ATTACK, rng = Random(it))!!
                 s = n
-                killed = r!!.killed
+                killed = events.any { e -> e is VictoryEvent }
             }
         }
         assertTrue(killed)
@@ -173,7 +176,7 @@ class GameEngineTest {
         s = GameEngine.addTask(s, "Stretch", 1, TaskType.ONE_OFF, Difficulty.EASY, day)
         s = s.copy(heroes = s.heroes.map { it.copy(charges = 9, weapon = 50) })
         assertTrue(!s.raidUnsealed())
-        assertNull(GameEngine.attack(s, 0, raid = true).second)
+        assertNull(GameEngine.act(s, 0, ATTACK, raid = true))
 
         s = s.copy(raid = s.raid!!.copy(progress = mapOf(0 to 3, 1 to 2)))
         assertTrue(!s.raidUnsealed())
@@ -183,10 +186,10 @@ class GameEngineTest {
         var won = false
         repeat(40) {
             if (!won) {
-                val (n, r) = GameEngine.attack(s, it % 5, raid = true, rng = Random(it))
+                val r = GameEngine.act(s, it % 5, ATTACK, raid = true, rng = Random(it))
                 if (r != null) {
-                    s = n
-                    won = r.killed
+                    s = r.first
+                    won = r.second.any { e -> e is VictoryEvent }
                 }
             }
         }
@@ -230,9 +233,9 @@ class GameEngineTest {
         var s = GameEngine.newGame(day)
         s = GameEngine.recruit(s, HeroClass.BARD, "Lyra", "Creative")
         s = s.copy(heroes = s.heroes.map { it.copy(charges = 5) })
-        s = GameEngine.attack(s, 5, rng = Random(1)).first
+        s = GameEngine.act(s, 5, ATTACK, rng = Random(1))!!.first
         assertTrue(s.inspired)
-        s = GameEngine.attack(s, 0, rng = Random(1)).first
+        s = GameEngine.act(s, 0, ATTACK, rng = Random(1))!!.first
         assertTrue(!s.inspired)
     }
 
@@ -245,5 +248,114 @@ class GameEngineTest {
         val hero = s.hero(0)!!
         val dmg = maxOf(1, s.monster.attack - 3)
         assertEquals(minOf(hero.maxHp, hero.maxHp - dmg + hero.maxHp / 10), hero.hp)
+    }
+
+    private fun battleReady(): GameState {
+        val s = GameEngine.newGame(day)
+        // A sturdy monster so tests don't end the fight by accident.
+        return s.copy(
+            heroes = s.heroes.map { it.copy(charges = 9, mp = 30) },
+            monster = s.monster.copy(hp = 10_000, maxHp = 10_000),
+        )
+    }
+
+    @Test
+    fun monsterActsAfterItsSpeedAndGuardHalves() {
+        var s = battleReady()
+        val m = s.monster
+        val targetId = m.intent!!.targetId!!
+        s = GameEngine.act(s, targetId, Command(ActionKind.GUARD), rng = Random(1))!!.first
+        assertTrue(s.hero(targetId)!!.guarding)
+        s = GameEngine.act(s, 2, ATTACK, rng = Random(2))!!.first
+        assertEquals(2, s.monster.counter)
+        val (after, events) = GameEngine.act(s, 2, ATTACK, rng = Random(3))!!
+        val hit = events.filterIsInstance<MonsterEvent>().single()
+        assertEquals(IntentType.STRIKE, hit.intent)
+        assertTrue(targetId in hit.guarded)
+        assertTrue(hit.damage.getValue(targetId) <= (m.attack * 1.1).toInt() / 2 + 1)
+        assertEquals(0, after.monster.counter)
+        assertTrue(after.heroes.none { it.guarding })
+        assertNotNull(after.monster.intent)
+    }
+
+    @Test
+    fun itemsDontAdvanceTheMonster() {
+        var s = battleReady()
+        s = s.copy(heroes = s.heroes.map { it.copy(hp = 5) })
+        val (after, _) = GameEngine.act(s, 0, Command(ActionKind.ITEM, Item.POTION, target = 1))!!
+        assertEquals(0, after.monster.counter)
+        assertEquals(9, after.hero(0)!!.charges)
+    }
+
+    @Test
+    fun weaknessDoesMoreDamageRevealsAndBreaks() {
+        var s = battleReady() // floor 1 slime: weak to fire
+        assertTrue(Element.FIRE in s.monster.weak)
+        val (a, ev) = GameEngine.act(s, 3, ATTACK, rng = Random(5))!!
+        val hit = ev.first() as HeroEvent
+        assertTrue(hit.weak)
+        assertTrue(Element.FIRE in a.knownWeak[s.monster.kind]!!)
+        s = a
+        var broke = false
+        repeat(4) {
+            if (!broke) {
+                val (n, e) = GameEngine.act(s, 3, ATTACK, rng = Random(10 + it))!!
+                s = n
+                broke = (e.first() as HeroEvent).broke
+            }
+        }
+        assertTrue(broke)
+        assertEquals(com.todorpg.app.data.Rules.BROKEN_TURNS, s.monster.broken)
+        // While broken, the monster doesn't act.
+        repeat(3) {
+            val (n, e) = GameEngine.act(s, 0, ATTACK, rng = Random(50 + it))!!
+            assertTrue(e.none { x -> x is MonsterEvent })
+            s = n
+        }
+    }
+
+    @Test
+    fun skillsCostMp() {
+        val s = battleReady()
+        val (after, events) = GameEngine.act(s, 2, Command(ActionKind.SKILL), rng = Random(1))!!
+        assertEquals(30 - HeroClass.RANGER.skillCost, after.hero(2)!!.mp)
+        assertEquals(3, (events.first() as HeroEvent).hits.size)
+        val broke = s.copy(heroes = s.heroes.map { it.copy(mp = 0) })
+        assertNull(GameEngine.act(broke, 2, Command(ActionKind.SKILL)))
+    }
+
+    @Test
+    fun druidRebirthRevives() {
+        var s = GameEngine.recruit(battleReady(), HeroClass.DRUID, "Fern", "Garden")
+        s = s.copy(heroes = s.heroes.map { if (it.id == 1) it.copy(hp = 0) else it.copy(charges = 9, mp = 30) })
+        val (after, events) = GameEngine.act(s, 5, Command(ActionKind.SKILL), rng = Random(1))!!
+        assertTrue(!after.hero(1)!!.isKo)
+        assertEquals(listOf(1), (events.first() as HeroEvent).revived)
+    }
+
+    @Test
+    fun loadsSaveFromPreviousVersion() {
+        // Trimmed save written by v0.2 (no MP, intents, break gauge or known weaknesses).
+        val old = """
+            {"heroes":[{"id":0,"heroClass":"KNIGHT","name":"Arthur","category":"Work","level":3,"exp":12,
+              "hp":40,"weapon":1,"charges":2,"gear":{}}],
+             "tasks":[{"id":1,"title":"Email","heroId":0,"type":"DAILY","difficulty":"NORMAL","createdDay":20000}],
+             "gold":55,"items":{"POTION":2},"inventory":[],"floor":4,
+             "monster":{"kind":"SKELETON","name":"Skeleton","floor":4,"tier":0,"hp":60,"maxHp":68,"attack":11,
+               "isBoss":false,"goldReward":52,"expReward":26},
+             "raid":null,"lastDay":20000,"log":[],"nextTaskId":2,"nextGearId":1,"settings":{"music":true}}
+        """.trimIndent()
+        val file = java.io.File.createTempFile("save", ".json")
+        file.writeText(old)
+        val s = com.todorpg.app.data.GameRepository(file).load()!!
+        assertEquals(55, s.gold)
+        assertEquals(3, s.hero(0)!!.level)
+        assertEquals(4, s.floor)
+        // New systems pick sensible defaults and the old monster can be fought.
+        val ready = s.copy(heroes = s.heroes.map { it.copy(charges = 3) })
+        val (after, events) = GameEngine.act(ready, 0, ATTACK, rng = Random(1))!!
+        assertTrue(events.first() is HeroEvent)
+        assertNotNull(after.monster.intent)
+        file.delete()
     }
 }

@@ -18,10 +18,19 @@ jobs:
 
       - uses: gradle/actions/setup-gradle@v4
 
+      # Optional: a fixed signing key so new APKs install over old ones.
+      - name: Restore signing key
+        env:
+          SIGNING_KEYSTORE_B64: ${{ secrets.SIGNING_KEYSTORE_B64 }}
+        if: env.SIGNING_KEYSTORE_B64 != ''
+        run: echo "$SIGNING_KEYSTORE_B64" | base64 -d > app/todorpg.keystore
+
       - name: Unit tests
         run: ./gradlew testDebugUnitTest --stacktrace
 
       - name: Build debug APK
+        env:
+          SIGNING_PASSWORD: ${{ secrets.SIGNING_PASSWORD }}
         run: ./gradlew assembleDebug --stacktrace
 
       - uses: actions/upload-artifact@v4

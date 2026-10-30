@@ -28,7 +28,6 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.unit.dp
 import com.todorpg.app.data.Equipment
 import com.todorpg.app.data.GameState
@@ -39,6 +38,9 @@ import com.todorpg.app.data.Item
 import com.todorpg.app.data.Rules
 import com.todorpg.app.ui.GameViewModel
 import com.todorpg.app.ui.components.ChargePips
+import com.todorpg.app.ui.components.HeroFigure
+import com.todorpg.app.ui.components.Pose
+import com.todorpg.app.ui.components.TappableHero
 import com.todorpg.app.ui.components.MenuButton
 import com.todorpg.app.ui.components.PixelSprite
 import com.todorpg.app.ui.components.RpgButton
@@ -58,7 +60,7 @@ fun PartyScreen(state: GameState, vm: GameViewModel) {
 
     LazyColumn(Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(8.dp)) {
         items(state.heroes, key = { it.id }) { hero ->
-            HeroCard(hero, Modifier.clickable { vm.click(); selectedId = hero.id })
+            HeroCard(hero, vm, Modifier.clickable { vm.click(); selectedId = hero.id })
         }
         if (state.heroes.size < Rules.MAX_PARTY) {
             item {
@@ -98,28 +100,11 @@ fun PartyScreen(state: GameState, vm: GameViewModel) {
     }
 }
 
-/** Hero sprite that lies down when KO'd. */
 @Composable
-fun HeroFigure(hero: Hero, modifier: Modifier = Modifier, frameMs: Int = 480) {
-    PixelSprite(
-        Sprites.hero(hero.heroClass),
-        modifier.graphicsLayer {
-            if (hero.isKo) {
-                rotationZ = -90f
-                translationY = size.height * 0.25f
-            }
-        },
-        frameMs = frameMs,
-        phase = hero.id * 170,
-        grayscale = hero.isKo,
-    )
-}
-
-@Composable
-private fun HeroCard(hero: Hero, modifier: Modifier = Modifier) {
+private fun HeroCard(hero: Hero, vm: GameViewModel, modifier: Modifier = Modifier) {
     RpgWindow(modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            HeroFigure(hero, Modifier.size(64.dp))
+            TappableHero(hero, Modifier.size(64.dp), onTap = vm::click)
             Spacer(Modifier.width(12.dp))
             Column(Modifier.weight(1f)) {
                 Row(verticalAlignment = Alignment.CenterVertically) {
@@ -134,6 +119,9 @@ private fun HeroCard(hero: Hero, modifier: Modifier = Modifier) {
                 Spacer(Modifier.height(4.dp))
                 LabeledBar("HP", "${hero.hp}/${hero.maxHp}") {
                     StatBar(hero.hp, hero.maxHp, hpColor(hero.hp, hero.maxHp), it)
+                }
+                LabeledBar("MP", "${hero.mp}/${hero.maxMp}") {
+                    StatBar(hero.mp, hero.maxMp, Color(0xFFB070F0), it)
                 }
                 LabeledBar("EXP", "${hero.exp}/${hero.expToNext}") {
                     StatBar(hero.exp, hero.expToNext, RpgColors.Exp, it)
@@ -192,13 +180,18 @@ private fun HeroDialog(hero: Hero, state: GameState, vm: GameViewModel, onDismis
             Column {
                 Text("Lv ${hero.level} ${hero.heroClass.title}", style = MaterialTheme.typography.bodyMedium)
                 Text(
-                    "HP ${hero.hp}/${hero.maxHp}  ATK ${hero.attack}  DEF ${hero.defense}",
+                    "HP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}\nATK ${hero.attack}  DEF ${hero.defense}",
                     style = MaterialTheme.typography.labelMedium,
                 )
                 Text(
-                    "${hero.heroClass.skill}: ${hero.heroClass.blurb}",
+                    "${hero.heroClass.attackName} (${hero.heroClass.element.label}): ${hero.heroClass.blurb}",
                     style = MaterialTheme.typography.labelSmall,
                     color = RpgColors.Dim,
+                )
+                Text(
+                    "Skill ${hero.heroClass.skill} (${hero.heroClass.skillCost} MP): ${hero.heroClass.skillBlurb}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = RpgColors.Exp,
                 )
             }
         }
@@ -346,14 +339,20 @@ private fun RecruitDialog(vm: GameViewModel, onDismiss: () -> Unit) {
                             .padding(4.dp),
                         horizontalAlignment = Alignment.CenterHorizontally,
                     ) {
-                        PixelSprite(Sprites.hero(c), Modifier.size(44.dp), animate = selected, frameMs = 300)
+                        PixelSprite(
+                            Sprites.hero(c, if (selected) Pose.VICTORY else Pose.IDLE),
+                            Modifier.size(44.dp),
+                            animate = selected,
+                            frameMs = 160,
+                        )
                         Text(c.title, style = MaterialTheme.typography.labelSmall)
                     }
                 }
             }
         }
         Text(
-            "${heroClass.skill}: ${heroClass.blurb}",
+            "${heroClass.attackName} (${heroClass.element.label}): ${heroClass.blurb}\n" +
+                "Skill ${heroClass.skill}: ${heroClass.skillBlurb}",
             Modifier.padding(top = 6.dp),
             style = MaterialTheme.typography.labelMedium,
             color = RpgColors.Gold,

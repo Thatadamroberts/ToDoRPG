@@ -210,3 +210,75 @@ fun DrawScope.sparkleBurst(progress: Float, count: Int = 12, color: Color = Colo
         }
     }
 }
+
+/** Ice shards raining onto the target (the Mage's Frost skill). */
+fun DrawScope.iceEffect(progress: Float) {
+    if (progress <= 0f || progress >= 1f) return
+    val u = size.minDimension / 20
+    for (k in 0 until 12) {
+        val seed = (k * 41 % 12) / 12f
+        val p = (progress * 1.5f - seed * 0.5f).coerceIn(0f, 1f)
+        if (p <= 0f || p >= 1f) continue
+        val x = size.width * (0.1f + seed * 0.8f)
+        val y = -u * 4 + p * (size.height * 0.75f)
+        val a = if (p > 0.8f) (1 - p) * 5 else 1f
+        for (j in 0 until 4) pixel(Color(0xFFB0F0FF), x, y + j * u, u, a * (1f - j * 0.2f))
+        pixel(Color.White, x, y + 4 * u, u * 1.2f, a)
+    }
+    val frost = if (progress > 0.5f) (1 - progress) * 2 else progress * 2
+    drawRect(Color(0x5560C8FF).copy(alpha = 0.35f * frost), Offset.Zero, size)
+}
+
+/** Rotating ring of runes under a casting hero. */
+fun DrawScope.castCircle(time: Long, color: Color) {
+    val cx = size.width / 2
+    val cy = size.height * 0.92f
+    val u = size.minDimension / 18
+    val n = 14
+    for (k in 0 until n) {
+        val a = k * 2 * PI.toFloat() / n + time / 300f
+        val x = cx + cos(a) * size.width * 0.5f
+        val y = cy + sin(a) * size.height * 0.12f
+        pixel(color, x, y, u, 0.5f + 0.5f * sin(time / 120f + k))
+    }
+    // Motes rising from the circle.
+    for (k in 0 until 5) {
+        val p = ((time / 900f) + k / 5f) % 1f
+        pixel(color, cx + (k - 2) * u * 2.2f, cy - p * size.height * 0.9f, u * 0.8f, 1 - p)
+    }
+}
+
+/** White arc in front of a hero mid-swing. Heroes face left. */
+fun DrawScope.swingArc(progress: Float) {
+    if (progress <= 0f || progress >= 1f) return
+    val u = size.minDimension / 14
+    val steps = 10
+    val head = (progress * steps * 1.6f).toInt().coerceAtMost(steps)
+    for (s in 0..head) {
+        val a = (-100f + s * 14f) * PI.toFloat() / 180f
+        val r = size.minDimension * 0.62f
+        val x = size.width * 0.35f + cos(a) * r * -1f
+        val y = size.height * 0.55f + sin(a) * r
+        val fade = (1f - (head - s) / 6f) * (1f - progress)
+        pixel(Color.White, x, y, u * 1.2f, fade * 1.6f)
+    }
+}
+
+/** A small pixel shield in front of a guarding hero. */
+fun DrawScope.guardShield(time: Long) {
+    val glyph = listOf(".KKKK.", "KBBBBK", "KBWWBK", "KBWWBK", ".KBBK.", "..KK..")
+    val u = size.minDimension / 14
+    val x0 = -u * 2
+    val y0 = size.height * 0.35f + sin(time / 250f) * u * 0.5f
+    glyph.forEachIndexed { y, row ->
+        row.forEachIndexed { x, c ->
+            val color = when (c) {
+                'K' -> Color(0xFF101018)
+                'B' -> Color(0xFF4080E0)
+                'W' -> Color(0xFFE0F0FF)
+                else -> return@forEachIndexed
+            }
+            drawRect(color, Offset(x0 + x * u, y0 + y * u), Size(u + 0.5f, u + 0.5f))
+        }
+    }
+}

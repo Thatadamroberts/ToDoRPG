@@ -13,12 +13,32 @@ android {
         applicationId = "com.todorpg.app"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "0.1.0"
+        // CI passes its run number so every build installs as an upgrade.
+        val build = (System.getenv("GITHUB_RUN_NUMBER") ?: "1").toInt()
+        versionCode = build
+        versionName = "0.3.$build"
     }
 
+    // Sign with one fixed key (from the CI secrets) so each new APK installs over
+    // the old one and keeps your save. Without the secrets, the standard debug
+    // key is used, which only upgrades builds made on the same machine.
+    val keystore = file("todorpg.keystore")
+    val signingPassword = System.getenv("SIGNING_PASSWORD")
+    val sideload = if (keystore.exists() && signingPassword != null) {
+        signingConfigs.create("sideload") {
+            storeFile = keystore
+            storePassword = signingPassword
+            keyAlias = "todorpg"
+            keyPassword = signingPassword
+        }
+    } else null
+
     buildTypes {
+        debug {
+            if (sideload != null) signingConfig = sideload
+        }
         release {
+            if (sideload != null) signingConfig = sideload
             isMinifyEnabled = false
             proguardFiles(getDefaultProguardFile("proguard-android-optimize.txt"), "proguard-rules.pro")
         }

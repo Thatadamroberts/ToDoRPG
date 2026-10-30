@@ -15,15 +15,16 @@ import com.todorpg.app.data.Item
 import com.todorpg.app.data.Rules
 import com.todorpg.app.data.Settings
 import com.todorpg.app.data.TaskType
-import com.todorpg.app.game.AttackResult
+import com.todorpg.app.data.Element
+import com.todorpg.app.game.BattleEvent
+import com.todorpg.app.game.Command
+import com.todorpg.app.game.HeroEvent
+import com.todorpg.app.game.VictoryEvent
 import com.todorpg.app.game.GameEngine
 import com.todorpg.app.reminders.Reminders
 import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.flow.MutableSharedFlow
 import kotlinx.coroutines.flow.MutableStateFlow
-import kotlinx.coroutines.flow.SharedFlow
 import kotlinx.coroutines.flow.StateFlow
-import kotlinx.coroutines.flow.asSharedFlow
 import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.sync.Mutex
@@ -32,6 +33,9 @@ import java.time.LocalDate
 
 /** A banner message, optionally with an undo snapshot. */
 data class Banner(val id: Long, val text: String, val undo: GameState? = null)
+
+/** One battle command's events plus the state to show once they've played. */
+data class BattleAnim(val id: Long, val events: List<BattleEvent>, val after: GameState)
 
 /** Shown as a full-screen "LEVEL UP!" celebration. */
 data class Celebration(val id: Long, val heroIds: List<Int>)
@@ -52,9 +56,14 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     private val _celebration = MutableStateFlow<Celebration?>(null)
     val celebration: StateFlow<Celebration?> = _celebration.asStateFlow()
 
-    private val _battleEvents = MutableSharedFlow<AttackResult>(extraBufferCapacity = 16)
-    /** One event per attack, for the battle screen to animate. */
-    val battleEvents: SharedFlow<AttackResult> = _battleEvents.asSharedFlow()
+    private val _battleAnim = MutableStateFlow<BattleAnim?>(null)
+    /**
+     * The battle action being animated. The UI keeps showing the old state
+     * until the battle screen calls [finishBattleAnim], so HP bars and the
+     * next monster don't jump ahead of the animation. The result is saved
+     * to disk straight away.
+     */
+    val battleAnim: StateFlow<BattleAnim?> = _battleAnim.asStateFlow()
 
     init {
         applyAudioSettings(_state.value.settings)
@@ -67,14 +76,24 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
     /** Call whenever the app comes to the foreground to process day changes. */
     fun onResume() = update { GameEngine.rollover(it, today()) }
 
+    @Volatile
+    private var latest: GameState? = null
+
+    /** Saves in the background; whichever write runs last always writes the newest state. */
+    private fun save(state: GameState) {
+        latest = state
+        viewModelScope.launch(Dispatchers.IO) {
+            saveLock.withLock { latest?.let(repo::save) }
+        }
+    }
+
     private fun update(transform: (GameState) -> GameState) {
+        _battleAnim.value?.let { finishBattleAnim(it.id) }
         val old = _state.value
         val new = transform(old)
         if (new == old) return
         _state.value = new
-        viewModelScope.launch(Dispatchers.IO) {
-            saveLock.withLock { repo.save(_state.value) }
-        }
+        save(new)
     }
 
     private fun banner(text: String, undo: GameState? = null) {
@@ -136,29 +155,32 @@ class GameViewModel(app: Application) : AndroidViewModel(app) {
 
     // region Battle
 
-    fun attack(heroId: Int, raid: Boolean) {
-        val (next, result) = GameEngine.attack(_state.value, heroId, raid)
-        if (result == null) return
-        update { next }
-        _battleEvents.tryEmit(result)
+    fun act(heroId: Int, cmd: Command, raid: Boolean) {
+        if (_battleAnim.value != null) return
+        val (next, events) = GameEngine.act(_state.value, heroId, cmd, raid) ?: return
+        save(next)
+        _battleAnim.value = BattleAnim(++counter, events, next)
     }
 
-    /** Called by the battle screen when the matching animation beat lands. */
-    fun playHitSound(result: AttackResult) {
+    fun finishBattleAnim(id: Long) {
+        val anim = _battleAnim.value ?: return
+        if (anim.id != id) return
+        _battleAnim.value = null
+        _state.value = anim.after
+        anim.events.filterIsInstance<VictoryEvent>().firstOrNull()?.let { celebrate(it.levelUps) }
+    }
+
+    fun sfx(sound: Sfx, volume: Float = 0.8f) = audio.play(sound, volume)
+
+    fun playHitSound(e: HeroEvent) {
         audio.play(
             when {
-                result.critical -> Sfx.CRIT
-                result.heroClass == HeroClass.MAGE || result.heroClass == HeroClass.BARD -> Sfx.MAGIC
+                e.critical || e.broke -> Sfx.CRIT
+                e.element == Element.FIRE || e.element == Element.ICE || e.element == Element.SOUND ||
+                    e.element == Element.HOLY -> Sfx.MAGIC
                 else -> Sfx.HIT
             }
         )
-        if (result.healedHeroIds.isNotEmpty()) audio.play(Sfx.HEAL, 0.6f)
-    }
-
-    fun playVictory(result: AttackResult) {
-        audio.play(Sfx.DEFEAT)
-        audio.play(Sfx.VICTORY, 0.9f)
-        celebrate(result.levelUps)
     }
 
     // endregion

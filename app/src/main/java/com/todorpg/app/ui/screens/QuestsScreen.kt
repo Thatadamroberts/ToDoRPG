@@ -42,7 +42,11 @@ import com.todorpg.app.data.Rules
 import com.todorpg.app.data.Task
 import com.todorpg.app.data.TaskType
 import com.todorpg.app.ui.GameViewModel
+import com.todorpg.app.ui.components.CheerOnIncrease
+import com.todorpg.app.ui.components.HeroFigure
 import com.todorpg.app.ui.components.MenuButton
+import com.todorpg.app.ui.components.Pose
+import com.todorpg.app.ui.components.rememberCheer
 import com.todorpg.app.ui.components.PixelSprite
 import com.todorpg.app.ui.components.RpgButton
 import com.todorpg.app.ui.components.RpgDialog
@@ -132,7 +136,16 @@ private fun CategoryWindow(
 ) {
     RpgWindow(Modifier.fillMaxWidth()) {
         Row(verticalAlignment = Alignment.CenterVertically) {
-            PixelSprite(Sprites.hero(hero.heroClass), Modifier.size(36.dp), phase = hero.id * 170, grayscale = hero.isKo)
+            // The hero hops for joy when one of their quests is completed.
+            val cheer = rememberCheer()
+            CheerOnIncrease(cheer, tasks.count { it.isDone(today) })
+            with(cheer) {
+                HeroFigure(
+                    hero,
+                    Modifier.size(36.dp).cheer(),
+                    pose = if (cheer.progress.value < 1f) Pose.VICTORY else null,
+                )
+            }
             Spacer(Modifier.width(8.dp))
             Column(Modifier.weight(1f)) {
                 Text(hero.category.uppercase(), style = MaterialTheme.typography.titleSmall, color = RpgColors.Gold)

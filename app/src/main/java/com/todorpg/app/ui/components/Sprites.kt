@@ -24,6 +24,9 @@ class SpriteSheet(val frames: List<List<String>>, val palette: Map<Char, Color>,
     val rows: Int = frames.first().size
 }
 
+/** Animation poses. Most are derived from a hero's single drawing by shifting pixels. */
+enum class Pose { IDLE, WALK, WINDUP, STRIKE, CAST, HURT, KNEEL, VICTORY, GUARD }
+
 /**
  * 16x16 pixel-art sprites. Idle animation frames are derived from a single
  * drawing where possible: the "breathe" frame sinks the upper body by a pixel.
@@ -334,6 +337,31 @@ object Sprites {
     private val gearArmor = listOf("KK....KK", "KAKKKKAK", "KAAAAAAK", ".KAAAAK.", ".KAYYAK.", ".KAAAAK.", ".KAAAAK.", "..KKKK..")
     private val gearAccessory = listOf("...KK...", "..KYYK..", ".KYKKYK.", "KYK..KYK", "KYK..KYK", ".KYKKYK.", "..KYYK..", "...KK...")
 
+    private fun shiftRow(row: String, by: Int): String = when {
+        by > 0 -> ".".repeat(by) + row.dropLast(by)
+        by < 0 -> row.drop(-by) + ".".repeat(-by)
+        else -> row
+    }
+
+    /** Lean: the head moves [k] pixels sideways (positive = right), feet stay planted. */
+    private fun shear(grid: List<String>, k: Int): List<String> = grid.mapIndexed { y, row ->
+        if (y >= 12) row else shiftRow(row, Math.round(k * (11 - y) / 11f))
+    }
+
+    /** Legs apart, for a walking step. */
+    private fun stride(grid: List<String>): List<String> = grid.mapIndexed { y, row ->
+        if (y < 12) row else {
+            val half = row.length / 2
+            shiftRow(row.take(half), -1) + shiftRow(row.drop(half), 1)
+        }
+    }
+
+    /** Crouched on one knee: upper body drops two pixels, thighs disappear. */
+    private fun kneel(grid: List<String>): List<String> {
+        val blank = ".".repeat(grid.first().length)
+        return listOf(blank, blank) + shear(grid, -1).subList(0, 11) + grid.subList(13, grid.size)
+    }
+
     /** Upper body sinks one pixel: rows 0..7 shift down, overwriting row 8. */
     private fun breathe(grid: List<String>): List<String> {
         val blank = ".".repeat(grid.first().length)
@@ -343,22 +371,40 @@ object Sprites {
     private fun pal(a: Long, b: Long, extra: Map<Char, Color> = emptyMap()) =
         base + mapOf('A' to Color(a), 'B' to Color(b)) + extra
 
-    private val heroSheets: Map<HeroClass, SpriteSheet> = HeroClass.entries.associateWith { c ->
-        val (grid, palette) = when (c) {
-            HeroClass.KNIGHT -> knight to pal(0xFF4068C8, 0xFFC82830)
-            HeroClass.MONK -> monk to pal(0xFFE87828, 0xFFA04818, mapOf('H' to Color(0xFF281810)))
-            HeroClass.RANGER -> ranger to pal(0xFF309848, 0xFF685030, mapOf('H' to Color(0xFF402818)))
-            HeroClass.MAGE -> mage to pal(0xFF3850B0, 0xFF784828, mapOf('E' to Color(0xFFFFE650)))
-            HeroClass.CLERIC -> cleric to pal(0xFFF8F8F8, 0xFFF8F8F8)
-            HeroClass.BARD -> bard to pal(0xFF30A098, 0xFFC84078, mapOf('H' to Color(0xFF986028)))
-            HeroClass.SAMURAI -> samurai to pal(0xFF383848, 0xFF782830, mapOf('H' to Color(0xFF282838)))
-            HeroClass.DRUID -> druid to pal(0xFF408038, 0xFFC8A858, mapOf('H' to Color(0xFF886030)))
-        }
-        val blink = if (c == HeroClass.MAGE) Color(0xFF101018) else palette.getValue('S')
-        SpriteSheet(listOf(grid, breathe(grid)), palette, blinkColor = blink)
+    private fun heroBase(c: HeroClass): Pair<List<String>, Map<Char, Color>> = when (c) {
+        HeroClass.KNIGHT -> knight to pal(0xFF4068C8, 0xFFC82830)
+        HeroClass.MONK -> monk to pal(0xFFE87828, 0xFFA04818, mapOf('H' to Color(0xFF281810)))
+        HeroClass.RANGER -> ranger to pal(0xFF309848, 0xFF685030, mapOf('H' to Color(0xFF402818)))
+        HeroClass.MAGE -> mage to pal(0xFF3850B0, 0xFF784828, mapOf('E' to Color(0xFFFFE650)))
+        HeroClass.CLERIC -> cleric to pal(0xFFF8F8F8, 0xFFF8F8F8)
+        HeroClass.BARD -> bard to pal(0xFF30A098, 0xFFC84078, mapOf('H' to Color(0xFF986028)))
+        HeroClass.SAMURAI -> samurai to pal(0xFF383848, 0xFF782830, mapOf('H' to Color(0xFF282838)))
+        HeroClass.DRUID -> druid to pal(0xFF408038, 0xFFC8A858, mapOf('H' to Color(0xFF886030)))
     }
 
-    fun hero(c: HeroClass): SpriteSheet = heroSheets.getValue(c)
+    private val heroSheets: Map<Pair<HeroClass, Pose>, SpriteSheet> = buildMap {
+        for (c in HeroClass.entries) {
+            val (g, palette) = heroBase(c)
+            val blink = if (c == HeroClass.MAGE) Color(0xFF101018) else palette.getValue('S')
+            for (pose in Pose.entries) {
+                val frames = when (pose) {
+                    Pose.IDLE -> listOf(g, breathe(g))
+                    Pose.WALK -> listOf(stride(g), g)
+                    Pose.WINDUP -> listOf(shear(g, 2))
+                    Pose.STRIKE -> listOf(shear(g, -3))
+                    Pose.CAST -> listOf(shear(g, -1), breathe(shear(g, -1)))
+                    Pose.HURT -> listOf(shear(g, 3))
+                    Pose.KNEEL -> listOf(kneel(g), breathe(kneel(g)))
+                    Pose.VICTORY -> listOf(g, stride(g))
+                    Pose.GUARD -> listOf(shear(g, 1))
+                }
+                val blinks = pose == Pose.IDLE || pose == Pose.KNEEL
+                put(c to pose, SpriteSheet(frames, palette, blinkColor = if (blinks) blink else null))
+            }
+        }
+    }
+
+    fun hero(c: HeroClass, pose: Pose = Pose.IDLE): SpriteSheet = heroSheets.getValue(c to pose)
 
     /** Palettes per tier so deeper floors get recoloured monsters. */
     private val monsterPalettes: Map<MonsterKind, List<Pair<Long, Long>>> = mapOf(
@@ -371,21 +417,35 @@ object Sprites {
         MonsterKind.DEMON to listOf(0xFFA02840 to 0xFF482060, 0xFF283890 to 0xFF701830, 0xFF306030 to 0xFF202020, 0xFF602070 to 0xFFB04020),
     )
 
-    fun monster(kind: MonsterKind, tier: Int): SpriteSheet {
-        val frames = when (kind) {
-            MonsterKind.SLIME -> listOf(slime)
-            MonsterKind.BAT -> listOf(bat, bat2)
-            MonsterKind.GOBLIN -> listOf(goblin, breathe(goblin))
-            MonsterKind.SKELETON -> listOf(skeleton, breathe(skeleton))
-            MonsterKind.DRAGON -> listOf(dragon, breathe(dragon))
-            MonsterKind.GOLEM -> listOf(golem, breathe(golem))
-            MonsterKind.DEMON -> listOf(demon, breathe(demon))
+    private val monsterCache = HashMap<Triple<MonsterKind, Int, Pose>, SpriteSheet>()
+
+    /** Monsters face right, so leaning forward is a positive shear. */
+    fun monster(kind: MonsterKind, tier: Int, pose: Pose = Pose.IDLE): SpriteSheet =
+        monsterCache.getOrPut(Triple(kind, tier, pose)) {
+            val base = when (kind) {
+                MonsterKind.SLIME -> slime
+                MonsterKind.BAT -> bat
+                MonsterKind.GOBLIN -> goblin
+                MonsterKind.SKELETON -> skeleton
+                MonsterKind.DRAGON -> dragon
+                MonsterKind.GOLEM -> golem
+                MonsterKind.DEMON -> demon
+            }
+            val frames = when (pose) {
+                Pose.WINDUP -> listOf(shear(base, -2))
+                Pose.STRIKE -> listOf(shear(base, 3))
+                Pose.HURT -> listOf(shear(base, -3))
+                else -> when (kind) {
+                    MonsterKind.SLIME -> listOf(slime)
+                    MonsterKind.BAT -> listOf(bat, bat2)
+                    else -> listOf(base, breathe(base))
+                }
+            }
+            val palettes = monsterPalettes.getValue(kind)
+            val (a, b) = palettes[tier.coerceIn(0, palettes.lastIndex)]
+            val extra = if (kind == MonsterKind.SKELETON) mapOf('W' to Color(a)) else emptyMap()
+            SpriteSheet(frames, pal(a, b, extra))
         }
-        val palettes = monsterPalettes.getValue(kind)
-        val (a, b) = palettes[tier.coerceIn(0, palettes.lastIndex)]
-        val extra = if (kind == MonsterKind.SKELETON) mapOf('W' to Color(a)) else emptyMap()
-        return SpriteSheet(frames, pal(a, b, extra))
-    }
 
     fun gear(slot: GearSlot, rarity: Rarity): SpriteSheet {
         val grid = when (slot) {
@@ -419,6 +479,7 @@ fun PixelSprite(
     grayscale: Boolean = false,
     flash: () -> Boolean = { false },
     dissolve: () -> Float = { 0f },
+    tint: () -> Color? = { null },
     flipX: Boolean = false,
 ) {
     val frames = remember(sheet, grayscale) {
@@ -451,6 +512,7 @@ fun PixelSprite(
         val blinking = blinkColor != null && animate && !grayscale && (t % 3700) < 140
         val white = flash()
         val d = dissolve()
+        val tintColor = tint()
         val px = size.width / sheet.cols
         val py = size.height / sheet.rows
         for (p in frame) {
@@ -459,6 +521,7 @@ fun PixelSprite(
                 white -> Color.White
                 blinking && p.blinkable -> blinkColor!!
                 d > 0f -> lerp(p.color, Color(0xFFFF2040), d.coerceAtMost(0.8f))
+                tintColor != null -> lerp(p.color, tintColor, 0.55f)
                 else -> p.color
             }
             // Slight overdraw avoids hairline gaps between pixels.
