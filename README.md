@@ -13,7 +13,10 @@ levels up that hero and earns them a turn in battle.
 | Learning | Vivi   | Mage: big magic damage              |
 | Social   | Rosa   | Cleric: weak hits, heals allies     |
 
-Hero names and category names can be changed from the Party screen.
+Hero names and category names can be changed from the Party screen. You can recruit up to
+8 heroes in total (each new hero is a new category), including three extra classes:
+**Bard** (weak hits, next ally hits +50%), **Samurai** (heavy blows, good crits) and
+**Druid** (light hits, heals the whole party).
 
 ## How it plays
 
@@ -30,10 +33,29 @@ Hero names and category names can be changed from the Party screen.
   yesterday (the penalty covers at most 3 days, so a holiday won't wipe you out). A hero at 0 HP is KO'd: they
   can't fight and earn half EXP until revived. Levelling up fully heals and revives a hero.
   The party also recovers 10% HP each night.
-- **Shop**: Potions, Elixirs and Phoenix Feathers, plus weapon upgrades (+4 ATK each).
+- **Gear**: monsters drop weapons, armour and accessories in four rarities (Common, Rare,
+  Epic, Legendary). Bosses always drop Rare or better. Equip gear from a hero's page on the
+  Party screen. Armour's DEF reduces damage from missed dailies. Sell spare gear from the bag
+  in the Shop.
+- **Weekly raid**: every Monday a raid boss appears, sealed in chains. Each hero with quests
+  must finish 3 of them that week to break their seal. Once every seal is broken, spend turns on
+  the raid boss for an Epic-or-better drop and a big gold reward.
+- **Shop**: Potions, Elixirs and Phoenix Feathers, plus Dojo training (+4 ATK each).
+- **Daily reminder** (⚙ settings): a notification at your chosen time if any dailies are left.
 - Completing or deleting a quest can be undone from the banner for a few seconds.
 
 Progress is saved on the device in `files/save.json`.
+
+## Art and sound
+
+- Sprites are 16×16 pixel art defined as character grids in `ui/components/Sprites.kt`, and
+  animated in code (idle breathing, blinking, attack effects, death dissolve).
+- Music and sound effects are original chiptune, rendered by `tools/make_audio.py`
+  (`python3 tools/make_audio.py`, needs numpy and ffmpeg). The camp theme plays on menus and a
+  faster theme plays in battle.
+- Fonts: [Press Start 2P](https://fonts.google.com/specimen/Press+Start+2P) and
+  [Pixelify Sans](https://fonts.google.com/specimen/Pixelify+Sans), both under the SIL Open Font
+  License (see `licenses/`).
 
 ## Building
 
