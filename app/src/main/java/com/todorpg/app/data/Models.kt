@@ -279,6 +279,8 @@ data class Settings(
     val reminders: Boolean = false,
     val reminderHour: Int = 19,
     val reminderMinute: Int = 0,
+    /** Last app version whose "What's new" was shown. */
+    val seenVersion: Int = 0,
 )
 
 @Serializable

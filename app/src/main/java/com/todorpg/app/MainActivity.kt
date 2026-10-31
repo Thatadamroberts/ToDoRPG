@@ -184,6 +184,29 @@ private fun App(vm: GameViewModel) {
     if (showSettings) {
         SettingsDialog(state.settings, vm, onChange = vm::updateSettings, onDismiss = { showSettings = false })
     }
+    if (state.settings.seenVersion < BuildConfig.VERSION_CODE) {
+        WhatsNew(onDismiss = { vm.updateSettings(state.settings.copy(seenVersion = BuildConfig.VERSION_CODE)) })
+    }
+}
+
+/** Shown once after each update so new features are easy to find. */
+@Composable
+private fun WhatsNew(onDismiss: () -> Unit) {
+    RpgDialog("What's new · v${BuildConfig.VERSION_NAME}", onDismiss) {
+        listOf(
+            "📖 Journal (top bar): trophies that pay gold, and a bestiary of monsters.",
+            "🥚 Pets (Party screen → Companions): your starter egg hatches after 10 quests.",
+            "⭐ Skill tree (Party → tap a hero): one point per level. Promotion at Lv 15.",
+            "🏠 Widget: long-press your home screen → Widgets → ToDo RPG quests.",
+            "💾 Backup (⚙ Settings): export and import your save.",
+        ).forEach {
+            Text(it, Modifier.padding(vertical = 4.dp), style = MaterialTheme.typography.bodySmall)
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
+            RpgButton("Let's go!", onClick = onDismiss)
+        }
+    }
 }
 
 @Composable
@@ -372,7 +395,8 @@ private fun SettingsDialog(settings: Settings, vm: GameViewModel, onChange: (Set
         )
         Spacer(Modifier.height(12.dp))
         Text(
-            "Music and pixel art made for ToDo RPG. Fonts: Press Start 2P and Pixelify Sans (SIL OFL).",
+            "Version ${BuildConfig.VERSION_NAME}. Music and pixel art made for ToDo RPG. " +
+                "Fonts: Press Start 2P and Pixelify Sans (SIL OFL).",
             style = MaterialTheme.typography.labelSmall,
             color = RpgColors.Dim,
         )
