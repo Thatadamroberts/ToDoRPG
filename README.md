@@ -47,6 +47,17 @@ Hero names and category names can be changed from the Party screen. You can recr
   must finish 3 of them that week to break their seal. Once every seal is broken, spend turns on
   the raid boss for an Epic-or-better drop and a big gold reward.
 - **Shop**: Potions, Elixirs and Phoenix Feathers, plus Dojo training (+4 ATK each).
+- **Growth**: every level gives a skill point for the hero's skill tree (Might, Vitality, Focus,
+  Precision, Fortune, then Mastery). At level 15 a hero can be promoted to an advanced class
+  (Knight → Paladin, Mage → Archmage, …) with better stats, stronger skills and gold trim.
+- **Pets**: you start with an egg, and every 7 days of a daily streak lays another. Eggs hatch
+  after 10 quests into a Chick, Pup, Cat, Turtle or Fairy, each with a passive bonus that grows
+  as you complete quests together. Pick which one comes along on the Party screen.
+- **Journal** (📖): 24 achievements that pay out gold, and a bestiary that fills in each
+  monster's weaknesses and resistances as you discover them.
+- **Widget**: add "ToDo RPG quests" to your home screen to see today's dailies and tick them off.
+- **Backup** (⚙ settings): export your save to a file (Google Drive works from the picker) and
+  import it again later.
 - **Daily reminder** (⚙ settings): a notification at your chosen time if any dailies are left.
 - Completing or deleting a quest can be undone from the banner for a few seconds.
 
