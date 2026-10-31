@@ -1,4 +1,4 @@
 <resources>
     <string name="app_name">ToDo RPG</string>
-    <string name="widget_description">Today's daily quests. Tap one to complete it.</string>
+    <string name="widget_description">Today\'s daily quests. Tap one to complete it.</string>
 </resources>
