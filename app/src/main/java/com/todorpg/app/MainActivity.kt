@@ -50,6 +50,7 @@ import androidx.compose.runtime.setValue
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.unit.IntOffset
 import androidx.compose.ui.unit.dp
 import androidx.lifecycle.compose.collectAsStateWithLifecycle
@@ -63,6 +64,7 @@ import com.todorpg.app.ui.components.ClockProvider
 import com.todorpg.app.ui.components.LocalClock
 import com.todorpg.app.ui.components.MenuButton
 import com.todorpg.app.ui.components.PixelSprite
+import com.todorpg.app.ui.components.Pose
 import com.todorpg.app.ui.components.RpgButton
 import com.todorpg.app.ui.components.RpgDialog
 import com.todorpg.app.ui.components.RpgWindow
@@ -70,6 +72,7 @@ import com.todorpg.app.ui.components.Sprites
 import com.todorpg.app.ui.components.Starfield
 import com.todorpg.app.ui.components.sparkleBurst
 import com.todorpg.app.ui.screens.BattleScreen
+import com.todorpg.app.ui.screens.JournalScreen
 import com.todorpg.app.ui.screens.Label
 import com.todorpg.app.ui.screens.PartyScreen
 import com.todorpg.app.ui.screens.QuestsScreen
@@ -108,7 +111,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Tab(val label: String) { QUESTS("Quests"), PARTY("Party"), BATTLE("Battle"), SHOP("Shop") }
+private enum class Tab(val label: String) { QUESTS("Quests"), PARTY("Party"), BATTLE("Battle"), SHOP("Shop"), JOURNAL("Journal") }
 
 @Composable
 private fun App(vm: GameViewModel) {
@@ -134,7 +137,15 @@ private fun App(vm: GameViewModel) {
                 .safeDrawingPadding()
                 .padding(8.dp)
         ) {
-            TopBar(state, onSettings = { vm.click(); showSettings = true })
+            TopBar(
+                state,
+                journalOpen = tab == Tab.JOURNAL,
+                onJournal = {
+                    vm.click()
+                    tab = if (tab == Tab.JOURNAL) Tab.QUESTS else Tab.JOURNAL
+                },
+                onSettings = { vm.click(); showSettings = true },
+            )
             AnimatedContent(
                 targetState = tab,
                 modifier = Modifier.weight(1f).fillMaxWidth().padding(vertical = 8.dp),
@@ -150,11 +161,12 @@ private fun App(vm: GameViewModel) {
                     Tab.PARTY -> PartyScreen(state, vm)
                     Tab.BATTLE -> BattleScreen(state, vm)
                     Tab.SHOP -> ShopScreen(state, vm)
+                    Tab.JOURNAL -> JournalScreen(state, vm)
                 }
             }
             RpgWindow(Modifier.fillMaxWidth(), padding = 2.dp) {
                 Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceEvenly) {
-                    Tab.entries.forEach { t ->
+                    Tab.entries.filter { it != Tab.JOURNAL }.forEach { t ->
                         val badge = if (t == Tab.BATTLE && state.heroes.any { it.charges > 0 && !it.isKo }) "!" else ""
                         MenuButton(t.label + badge, selected = tab == t) {
                             if (tab != t) vm.click()
@@ -170,12 +182,12 @@ private fun App(vm: GameViewModel) {
     }
 
     if (showSettings) {
-        SettingsDialog(state.settings, onChange = vm::updateSettings, onDismiss = { showSettings = false })
+        SettingsDialog(state.settings, vm, onChange = vm::updateSettings, onDismiss = { showSettings = false })
     }
 }
 
 @Composable
-private fun TopBar(state: GameState, onSettings: () -> Unit) {
+private fun TopBar(state: GameState, journalOpen: Boolean, onJournal: () -> Unit, onSettings: () -> Unit) {
     val gold by animateIntAsState(state.gold, tween(600), label = "gold")
     RpgWindow(Modifier.fillMaxWidth(), padding = 6.dp) {
         Row(
@@ -185,7 +197,15 @@ private fun TopBar(state: GameState, onSettings: () -> Unit) {
             Text("FLOOR ${state.floor}", style = MaterialTheme.typography.titleSmall)
             Spacer(Modifier.weight(1f))
             Text("$gold G", style = MaterialTheme.typography.titleSmall, color = RpgColors.Gold)
-            Spacer(Modifier.width(12.dp))
+            Spacer(Modifier.width(8.dp))
+            Text(
+                "📖",
+                Modifier
+                    .clickable(onClick = onJournal)
+                    .padding(horizontal = 6.dp),
+                style = MaterialTheme.typography.titleLarge,
+                color = if (journalOpen) RpgColors.Gold else RpgColors.Text,
+            )
             Text(
                 "⚙",
                 Modifier
@@ -251,23 +271,33 @@ private fun LevelUpOverlay(c: Celebration, state: GameState, onDone: () -> Unit)
         Canvas(Modifier.size(320.dp)) { sparkleBurst(burst.value, count = 16) }
         Column(horizontalAlignment = Alignment.CenterHorizontally) {
             Text(
-                "LEVEL UP!",
+                c.title,
                 Modifier.offset { IntOffset(0, (-abs(sin(clock.value / 160.0)) * 12).roundToInt()) },
                 style = MaterialTheme.typography.displaySmall,
                 color = RpgColors.Gold,
             )
             Spacer(Modifier.height(16.dp))
+            c.pet?.let { pet ->
+                PixelSprite(
+                    Sprites.pet(pet.kind),
+                    Modifier
+                        .size(96.dp * pop.value)
+                        .offset { IntOffset(0, (-abs(sin(clock.value / 130.0)) * 30).roundToInt()) },
+                    frameMs = 200,
+                )
+                Text("A ${pet.kind.label}! ${pet.bonusText}", style = MaterialTheme.typography.bodyMedium)
+            }
             Row(horizontalArrangement = Arrangement.spacedBy(12.dp)) {
                 c.heroIds.mapNotNull { state.hero(it) }.forEachIndexed { i, hero ->
                     Column(horizontalAlignment = Alignment.CenterHorizontally) {
                         PixelSprite(
-                            Sprites.hero(hero.heroClass),
+                            Sprites.hero(hero.heroClass, Pose.VICTORY, hero.promoted),
                             Modifier
                                 .size(72.dp * pop.value)
                                 .offset { IntOffset(0, (-abs(sin(clock.value / 130.0 + i)) * 40).roundToInt()) },
                             frameMs = 150,
                         )
-                        Text("${hero.name}  Lv ${hero.level}", style = MaterialTheme.typography.bodyMedium)
+                        Text("${hero.name}  Lv ${hero.level} ${hero.classTitle}", style = MaterialTheme.typography.bodyMedium)
                     }
                 }
             }
@@ -276,9 +306,35 @@ private fun LevelUpOverlay(c: Celebration, state: GameState, onDone: () -> Unit)
 }
 
 @Composable
-private fun SettingsDialog(settings: Settings, onChange: (Settings) -> Unit, onDismiss: () -> Unit) {
+private fun SettingsDialog(settings: Settings, vm: GameViewModel, onChange: (Settings) -> Unit, onDismiss: () -> Unit) {
+    val context = LocalContext.current
+    var pendingImport by remember { mutableStateOf<GameState?>(null) }
+    val exporter = rememberLauncherForActivityResult(ActivityResultContracts.CreateDocument("application/json")) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val ok = runCatching {
+            context.contentResolver.openOutputStream(uri)!!.use { it.write(vm.exportText().toByteArray()) }
+        }.isSuccess
+        vm.notify(if (ok) "Backup saved." else "Couldn't save the backup.")
+    }
+    val importer = rememberLauncherForActivityResult(ActivityResultContracts.OpenDocument()) { uri ->
+        if (uri == null) return@rememberLauncherForActivityResult
+        val text = runCatching { context.contentResolver.openInputStream(uri)!!.use { it.readBytes().decodeToString() } }.getOrNull()
+        val parsed = text?.let(vm::parseBackup)
+        if (parsed == null) vm.notify("That file isn't a ToDo RPG backup.") else pendingImport = parsed
+    }
     val permission = rememberLauncherForActivityResult(ActivityResultContracts.RequestPermission()) { granted ->
         if (granted) onChange(settings.copy(reminders = true))
+    }
+    pendingImport?.let { backup ->
+        ImportConfirm(
+            backup,
+            onConfirm = {
+                vm.importBackup(backup)
+                pendingImport = null
+                onDismiss()
+            },
+            onDismiss = { pendingImport = null },
+        )
     }
     RpgDialog("Settings", onDismiss) {
         Toggle("Music", settings.music) { onChange(settings.copy(music = it)) }
@@ -302,6 +358,18 @@ private fun SettingsDialog(settings: Settings, onChange: (Settings) -> Unit, onD
                 RpgButton("+") { onChange(settings.shiftTime(30)) }
             }
         }
+        Label("Backup")
+        Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RpgButton("Export") { exporter.launch("todorpg-backup-${java.time.LocalDate.now()}.json") }
+            RpgButton("Import") { importer.launch(arrayOf("application/json", "text/plain", "application/octet-stream")) }
+        }
+        Text(
+            "Save a backup file anywhere, including Google Drive, from the file picker. " +
+                "Android also backs the game up automatically with your phone's backups.",
+            Modifier.padding(top = 4.dp),
+            style = MaterialTheme.typography.labelSmall,
+            color = RpgColors.Dim,
+        )
         Spacer(Modifier.height(12.dp))
         Text(
             "Music and pixel art made for ToDo RPG. Fonts: Press Start 2P and Pixelify Sans (SIL OFL).",
@@ -311,6 +379,23 @@ private fun SettingsDialog(settings: Settings, onChange: (Settings) -> Unit, onD
         Spacer(Modifier.height(8.dp))
         Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.End) {
             RpgButton("Close", onClick = onDismiss)
+        }
+    }
+}
+
+@Composable
+private fun ImportConfirm(backup: GameState, onConfirm: () -> Unit, onDismiss: () -> Unit) {
+    RpgDialog("Restore backup?", onDismiss) {
+        Text(
+            "This replaces your current progress with the backup:\n" +
+                backup.heroes.joinToString("\n") { "• ${it.name} Lv ${it.level} ${it.classTitle}" } +
+                "\nFloor ${backup.floor} · ${backup.gold} G · ${backup.tasks.size} quests",
+            style = MaterialTheme.typography.bodySmall,
+        )
+        Spacer(Modifier.height(12.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+            RpgButton("Cancel", onClick = onDismiss)
+            RpgButton("Restore", onClick = onConfirm)
         }
     }
 }

@@ -51,7 +51,7 @@ fun HeroFigure(
     val clock = LocalClock.current
     val p = pose ?: restingPose(hero)
     PixelSprite(
-        com.todorpg.app.ui.components.Sprites.hero(hero.heroClass, p),
+        Sprites.hero(hero.heroClass, p, hero.promoted),
         modifier.graphicsLayer {
             if (hero.isKo && pose == null) {
                 rotationZ = -90f

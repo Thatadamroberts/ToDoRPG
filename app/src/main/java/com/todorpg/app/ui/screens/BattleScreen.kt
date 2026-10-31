@@ -287,6 +287,23 @@ fun BattleScreen(state: GameState, vm: GameViewModel) {
                 modifier = Modifier.align(Alignment.CenterEnd).padding(end = 8.dp),
             )
 
+            // The active companion bounces along beside the party.
+            state.pet()?.let { pet ->
+                val clock = LocalClock.current
+                PixelSprite(
+                    Sprites.pet(pet.kind),
+                    Modifier
+                        .align(Alignment.BottomEnd)
+                        .padding(end = 2.dp, bottom = 2.dp)
+                        .size(30.dp)
+                        .graphicsLayer {
+                            val speed = if (fx.celebrating) 90.0 else 260.0
+                            translationY = -abs(sin(clock.value / speed).toFloat()) * size.height * 0.3f
+                        },
+                    frameMs = 300,
+                )
+            }
+
             fx.victory?.let {
                 RpgWindow(Modifier.align(Alignment.Center).zIndex(5f), padding = 12.dp) {
                     Text(it, style = MaterialTheme.typography.titleSmall, color = RpgColors.Gold)

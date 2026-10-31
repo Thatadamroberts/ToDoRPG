@@ -358,4 +358,95 @@ class GameEngineTest {
         assertNotNull(after.monster.intent)
         file.delete()
     }
+
+    @Test
+    fun perksCostPointsAndBoostStats() {
+        var s = GameEngine.newGame(day)
+        s = s.copy(heroes = s.heroes.map { if (it.id == 0) it.copy(level = 4) else it })
+        val before = s.hero(0)!!
+        assertEquals(3, before.perkPoints)
+        s = GameEngine.learnPerk(s, 0, com.todorpg.app.data.Perk.MIGHT)
+        assertEquals(before.attack + 3, s.hero(0)!!.attack)
+        s = GameEngine.learnPerk(s, 0, com.todorpg.app.data.Perk.VITALITY)
+        assertEquals(before.maxHp + 12, s.hero(0)!!.maxHp)
+        // Mastery needs 6 points spent first.
+        s = GameEngine.learnPerk(s, 0, com.todorpg.app.data.Perk.MASTERY)
+        assertEquals(0, s.hero(0)!!.perk(com.todorpg.app.data.Perk.MASTERY))
+        s = GameEngine.respec(s.copy(gold = 500), 0)
+        assertEquals(3, s.hero(0)!!.perkPoints)
+        assertEquals(500 - Rules.RESPEC_COST, s.gold)
+    }
+
+    @Test
+    fun promotionNeedsLevelAndBoostsStats() {
+        var s = GameEngine.newGame(day)
+        assertEquals(s, GameEngine.promote(s, 0))
+        s = s.copy(heroes = s.heroes.map { if (it.id == 0) it.copy(level = Rules.PROMOTION_LEVEL) else it })
+        val before = s.hero(0)!!
+        s = GameEngine.promote(s, 0)
+        val after = s.hero(0)!!
+        assertTrue(after.promoted)
+        assertEquals("Paladin", after.classTitle)
+        assertTrue(after.attack > before.attack)
+        assertEquals(after.maxHp, after.hp)
+    }
+
+    @Test
+    fun starterEggHatchesAfterTenQuests() {
+        var s = GameEngine.rollover(GameEngine.newGame(day), day)
+        assertEquals(1, s.eggs.size)
+        s = GameEngine.addTask(s, "Tidy", 2, TaskType.ONE_OFF, Difficulty.EASY, day)
+        var hatched: com.todorpg.app.data.Pet? = null
+        repeat(Rules.EGG_QUESTS) {
+            s = GameEngine.addTask(s, "Job $it", 0, TaskType.ONE_OFF, Difficulty.EASY, day)
+            val r = GameEngine.completeTask(s, s.tasks.last().id, day)
+            s = r.first
+            r.second!!.hatched?.let { p -> hatched = p }
+        }
+        assertNotNull(hatched)
+        assertTrue(s.eggs.isEmpty())
+        assertEquals(hatched!!.id, s.activePet)
+    }
+
+    @Test
+    fun weekLongStreakLaysAnEgg() {
+        var s = withTask(TaskType.DAILY).copy(starterEgg = true)
+        for (d in 0 until 7) {
+            s = GameEngine.rollover(s, day + d)
+            val r = GameEngine.completeTask(s, 1, day + d)
+            s = r.first
+            if (d == 6) assertTrue(r.second!!.newEgg)
+        }
+        assertEquals(7, s.bestStreak)
+    }
+
+    @Test
+    fun petsBoostRewards() {
+        var s = withTask(TaskType.DAILY)
+        s = s.copy(pets = listOf(com.todorpg.app.data.Pet(9, com.todorpg.app.data.PetKind.CHICK, "Chick", quests = 100)), activePet = 9)
+        val gold = GameEngine.completeTask(s, 1, day).first.gold
+        assertTrue(gold > Rules.dailyGold(Difficulty.NORMAL, 1))
+    }
+
+    @Test
+    fun achievementsUnlockOncePayingGold() {
+        var s = withTask(TaskType.ONE_OFF)
+        s = GameEngine.completeTask(s, 1, day).first
+        val (unlocked, list) = GameEngine.checkAchievements(s, day)
+        assertTrue(com.todorpg.app.data.Achievement.FIRST_QUEST in list)
+        assertEquals(s.gold + list.sumOf { it.reward }, unlocked.gold)
+        assertTrue(GameEngine.checkAchievements(unlocked, day).second.isEmpty())
+    }
+
+    @Test
+    fun bestiaryTracksDefeatsAndResistances() {
+        var s = battleReady().let { b -> b.copy(monster = b.monster.copy(hp = 5)) }
+        // Floor 1 slime resists Blunt: the Monk discovers it.
+        val (after, events) = GameEngine.act(s, 1, ATTACK, rng = Random(3))!!
+        assertTrue((events.first() as HeroEvent).resisted)
+        assertTrue(Element.BLUNT in after.knownResist[com.todorpg.app.data.MonsterKind.SLIME]!!)
+        s = after
+        if (events.none { it is VictoryEvent }) s = GameEngine.act(s, 3, ATTACK, rng = Random(4))!!.first
+        assertEquals(1, s.defeatedKinds[com.todorpg.app.data.MonsterKind.SLIME])
+    }
 }

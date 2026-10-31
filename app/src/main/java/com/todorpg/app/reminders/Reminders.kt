@@ -15,10 +15,9 @@ import androidx.core.app.NotificationManagerCompat
 import androidx.core.content.ContextCompat
 import com.todorpg.app.MainActivity
 import com.todorpg.app.R
-import com.todorpg.app.data.GameRepository
+import com.todorpg.app.data.GameStore
 import com.todorpg.app.data.Settings
 import com.todorpg.app.data.TaskType
-import java.io.File
 import java.time.LocalDate
 import java.time.LocalDateTime
 import java.time.ZoneId
@@ -28,7 +27,12 @@ object Reminders {
     private const val CHANNEL = "daily_reminder"
     private const val REQUEST = 1001
 
-    fun saveFile(context: Context) = File(context.filesDir, "save.json")
+    fun saveFile(context: Context) = GameStore.saveFile(context)
+
+    private fun load(context: Context) = GameStore.run {
+        init(context)
+        value
+    }
 
     fun apply(context: Context, settings: Settings) {
         val alarm = context.getSystemService(AlarmManager::class.java)
@@ -59,7 +63,7 @@ object Reminders {
     }
 
     fun notifyIfNeeded(context: Context) {
-        val state = GameRepository(saveFile(context)).load() ?: return
+        val state = load(context)
         if (!state.settings.reminders) return
         val today = LocalDate.now().toEpochDay()
         val left = state.tasks.filter { it.type == TaskType.DAILY && !it.isDone(today) }
@@ -92,7 +96,10 @@ object Reminders {
 /** Fires the reminder and re-arms it for tomorrow; also re-arms after a reboot. */
 class ReminderReceiver : BroadcastReceiver() {
     override fun onReceive(context: Context, intent: Intent) {
-        val state = GameRepository(Reminders.saveFile(context)).load() ?: return
+        val state = GameStore.run {
+            init(context)
+            value
+        }
         if (intent.action != Intent.ACTION_BOOT_COMPLETED) {
             Reminders.notifyIfNeeded(context)
         }

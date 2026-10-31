@@ -13,6 +13,7 @@ import androidx.compose.ui.graphics.lerp
 import com.todorpg.app.data.GearSlot
 import com.todorpg.app.data.HeroClass
 import com.todorpg.app.data.MonsterKind
+import com.todorpg.app.data.PetKind
 import com.todorpg.app.data.Rarity
 
 /**
@@ -343,6 +344,133 @@ object Sprites {
         else -> row
     }
 
+    private val petChick = listOf(
+        "................",
+        "................",
+        "................",
+        "................",
+        "................",
+        "......KKKK......",
+        ".....KAAAAK.....",
+        "....KAAKAAK.....",
+        "...KYYAAAAAK....",
+        "....KKAAAAAAK...",
+        ".....KAAWWAAK...",
+        ".....KAAWWAAK...",
+        "......KAAAAK....",
+        ".......KYKYK....",
+        ".......KK.KK....",
+        "................",
+    )
+    private val petPup = listOf(
+        "................",
+        "................",
+        "................",
+        "................",
+        "...KK......KK...",
+        "..KBBK....KBBK..",
+        "..KBAKKKKKKABK..",
+        "...KAAAAAAAAK...",
+        "...KAKAAAAKAK...",
+        "...KAAAKKAAAK...",
+        "....KAAWWAAK....",
+        "...KAAAAAAAAK...",
+        "...KAAAAAAAAKK..",
+        "...KAAKAAKAAKBK.",
+        "...KKK.KK.KKK...",
+        "................",
+    )
+    private val petCat = listOf(
+        "................",
+        "................",
+        "................",
+        "................",
+        "...K........K...",
+        "..KAK......KAK..",
+        "..KAAKKKKKKAAK..",
+        "..KAAAAAAAAAAK..",
+        "..KAYKAAAAYKAK..",
+        "..KAAAAKKAAAAK..",
+        "...KAAAAAAAAK..K",
+        "....KAAAAAAK..KA",
+        "...KAAAAAAAAKKAK",
+        "...KAAAAAAAAKAK.",
+        "...KAKKAAKKAKK..",
+        "...KK..KK..KK...",
+    )
+    private val petTurtle = listOf(
+        "................",
+        "................",
+        "................",
+        "................",
+        "................",
+        "................",
+        ".....KKKKKK.....",
+        "....KBBABBAK....",
+        "...KBABBABBAK.KK",
+        "..KBBABBABBAKKSK",
+        "..KAAAAAAAAAAKEK",
+        ".KKKKKKKKKKKKKSK",
+        "..KSSK....KSSKK.",
+        "..KKK......KKK..",
+        "................",
+        "................",
+    )
+    private val petFairy = listOf(
+        "................",
+        "................",
+        "................",
+        "..KK........KK..",
+        ".KWWK..KK..KWWK.",
+        ".KWAWK.KYK.KWAWK",
+        "..KWWKKYYKKWWK..",
+        "...KKKSSSSKKK...",
+        "...KAWKSEESKWAK.",
+        "..KAAWKSSSSKWAAK",
+        "...KKKKAAAAKKKK.",
+        "......KAAAAK....",
+        ".......KAAK.....",
+        "........KK......",
+        "................",
+        "................",
+    )
+    private val eggGrid = listOf(
+        "................",
+        "................",
+        "................",
+        "......KKKK......",
+        ".....KWWWWK.....",
+        "....KWWWWWWK....",
+        "....KWAWWWWK....",
+        "...KWAAWWWWWK...",
+        "...KWWWWWAWWK...",
+        "...KWWWWAAAWK...",
+        "...KWAWWWAWWK...",
+        "...KWWAWWWWWK...",
+        "....KWWWWWWK....",
+        ".....KKKKKK.....",
+        "................",
+        "................",
+    )
+    private val trophyGrid = listOf(
+        "................",
+        "..KKKKKKKKKKKK..",
+        ".KYKYYYYYYYYKYK.",
+        "KYK.KYYWYYYK.KYK",
+        "KYK.KYWYYYYK.KYK",
+        ".KYKKYYYYYYKKYK.",
+        "..KKKYYYYYYKKK..",
+        ".....KYYYYK.....",
+        "......KYYK......",
+        ".......KK.......",
+        "......KYYK......",
+        ".....KYYYYK.....",
+        "....KBBBBBBK....",
+        "....KBBBBBBK....",
+        "....KKKKKKKK....",
+        "................",
+    )
+
     /** Lean: the head moves [k] pixels sideways (positive = right), feet stay planted. */
     private fun shear(grid: List<String>, k: Int): List<String> = grid.mapIndexed { y, row ->
         if (y >= 12) row else shiftRow(row, Math.round(k * (11 - y) / 11f))
@@ -404,7 +532,36 @@ object Sprites {
         }
     }
 
-    fun hero(c: HeroClass, pose: Pose = Pose.IDLE): SpriteSheet = heroSheets.getValue(c to pose)
+    private val promotedSheets = HashMap<Pair<HeroClass, Pose>, SpriteSheet>()
+
+    /** Promoted heroes get gold trim in place of steel and a brighter accent. */
+    fun hero(c: HeroClass, pose: Pose = Pose.IDLE, promoted: Boolean = false): SpriteSheet {
+        val sheet = heroSheets.getValue(c to pose)
+        if (!promoted) return sheet
+        return promotedSheets.getOrPut(c to pose) {
+            SpriteSheet(
+                sheet.frames,
+                sheet.palette + mapOf('G' to Color(0xFFF0C040), 'Y' to Color(0xFFFFF4B0), 'K' to Color(0xFF281830)),
+                sheet.blinkColor,
+            )
+        }
+    }
+
+    private val petSheets: Map<PetKind, SpriteSheet> = PetKind.entries.associateWith { k ->
+        val (grid, palette) = when (k) {
+            PetKind.CHICK -> petChick to pal(0xFFF8E048, 0xFFF8E048)
+            PetKind.PUP -> petPup to pal(0xFFC88C50, 0xFF784828)
+            PetKind.CAT -> petCat to pal(0xFF9696AA, 0xFF9696AA, mapOf('Y' to Color(0xFF78DC5A)))
+            PetKind.TURTLE -> petTurtle to pal(0xFF60B050, 0xFF407838)
+            PetKind.FAIRY -> petFairy to pal(0xFFF08CC8, 0xFFF08CC8)
+        }
+        SpriteSheet(listOf(grid, breathe(grid)), palette)
+    }
+
+    fun pet(kind: PetKind): SpriteSheet = petSheets.getValue(kind)
+
+    val egg: SpriteSheet by lazy { SpriteSheet(listOf(eggGrid), pal(0xFF78C878, 0xFF78C878)) }
+    val trophy: SpriteSheet by lazy { SpriteSheet(listOf(trophyGrid), pal(0xFF785030, 0xFF785030)) }
 
     /** Palettes per tier so deeper floors get recoloured monsters. */
     private val monsterPalettes: Map<MonsterKind, List<Pair<Long, Long>>> = mapOf(

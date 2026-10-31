@@ -28,6 +28,10 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.TransformOrigin
+import androidx.compose.ui.graphics.graphicsLayer
+import kotlin.math.abs
+import kotlin.math.sin
 import androidx.compose.ui.unit.dp
 import com.todorpg.app.data.Equipment
 import com.todorpg.app.data.GameState
@@ -35,9 +39,14 @@ import com.todorpg.app.data.GearSlot
 import com.todorpg.app.data.Hero
 import com.todorpg.app.data.HeroClass
 import com.todorpg.app.data.Item
+import com.todorpg.app.data.Perk
+import com.todorpg.app.data.Pet
+import com.todorpg.app.game.GameEngine
 import com.todorpg.app.data.Rules
 import com.todorpg.app.ui.GameViewModel
 import com.todorpg.app.ui.components.ChargePips
+import com.todorpg.app.ui.components.Cursor
+import com.todorpg.app.ui.components.LocalClock
 import com.todorpg.app.ui.components.HeroFigure
 import com.todorpg.app.ui.components.Pose
 import com.todorpg.app.ui.components.TappableHero
@@ -80,15 +89,7 @@ fun PartyScreen(state: GameState, vm: GameViewModel) {
                 }
             }
         }
-        item {
-            RpgWindow(Modifier.fillMaxWidth()) {
-                SectionTitle("RECORDS")
-                Text("Quests completed: ${state.tasksCompleted}", style = MaterialTheme.typography.bodySmall)
-                Text("Monsters defeated: ${state.monstersDefeated}", style = MaterialTheme.typography.bodySmall)
-                Text("Raid bosses defeated: ${state.raidsDefeated}", style = MaterialTheme.typography.bodySmall)
-                Text("Deepest floor: ${state.floor}", style = MaterialTheme.typography.bodySmall)
-            }
-        }
+        item { Companions(state, vm) }
     }
 
     selectedId?.let { id ->
@@ -111,8 +112,18 @@ private fun HeroCard(hero: Hero, vm: GameViewModel, modifier: Modifier = Modifie
                     Text(hero.name, Modifier.weight(1f), style = MaterialTheme.typography.titleMedium)
                     Text("Lv ${hero.level}", style = MaterialTheme.typography.titleSmall, color = RpgColors.Gold)
                 }
+                if (hero.canPromote || hero.perkPoints > 0) {
+                    Text(
+                        listOfNotNull(
+                            if (hero.canPromote) "PROMOTION READY!" else null,
+                            if (hero.perkPoints > 0) "${hero.perkPoints} skill point${if (hero.perkPoints == 1) "" else "s"}" else null,
+                        ).joinToString(" · "),
+                        style = MaterialTheme.typography.labelSmall,
+                        color = RpgColors.Charge,
+                    )
+                }
                 Text(
-                    "${hero.heroClass.title} · ${hero.category}" + if (hero.isKo) " · KO" else "",
+                    (if (hero.promoted) "★ " else "") + "${hero.classTitle} · ${hero.category}" + if (hero.isKo) " · KO" else "",
                     style = MaterialTheme.typography.labelMedium,
                     color = if (hero.isKo) RpgColors.HpCrit else RpgColors.Dim,
                 )
@@ -172,13 +183,14 @@ private fun HeroDialog(hero: Hero, state: GameState, vm: GameViewModel, onDismis
     var name by remember(hero.id) { mutableStateOf(hero.name) }
     var category by remember(hero.id) { mutableStateOf(hero.category) }
     var pickingSlot by remember { mutableStateOf<GearSlot?>(null) }
+    var skills by remember { mutableStateOf(false) }
 
     RpgDialog(hero.name, onDismiss) {
         Row(verticalAlignment = Alignment.CenterVertically) {
             HeroFigure(hero, Modifier.size(56.dp))
             Spacer(Modifier.width(10.dp))
             Column {
-                Text("Lv ${hero.level} ${hero.heroClass.title}", style = MaterialTheme.typography.bodyMedium)
+                Text("Lv ${hero.level} ${hero.classTitle}", style = MaterialTheme.typography.bodyMedium)
                 Text(
                     "HP ${hero.hp}/${hero.maxHp}  MP ${hero.mp}/${hero.maxMp}\nATK ${hero.attack}  DEF ${hero.defense}",
                     style = MaterialTheme.typography.labelMedium,
@@ -192,6 +204,23 @@ private fun HeroDialog(hero: Hero, state: GameState, vm: GameViewModel, onDismis
                     "Skill ${hero.heroClass.skill} (${hero.heroClass.skillCost} MP): ${hero.heroClass.skillBlurb}",
                     style = MaterialTheme.typography.labelSmall,
                     color = RpgColors.Exp,
+                )
+            }
+        }
+
+        Label("Growth")
+        Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RpgButton("Skill tree" + if (hero.perkPoints > 0) " (${hero.perkPoints})" else "") {
+                vm.click()
+                skills = true
+            }
+            when {
+                hero.promoted -> Text("★ ${hero.heroClass.promotedTitle}", style = MaterialTheme.typography.labelMedium, color = RpgColors.Gold)
+                hero.canPromote -> RpgButton("Promote!") { vm.promote(hero.id) }
+                else -> Text(
+                    "Becomes a ${hero.heroClass.promotedTitle} at Lv ${Rules.PROMOTION_LEVEL}",
+                    style = MaterialTheme.typography.labelSmall,
+                    color = RpgColors.Dim,
                 )
             }
         }
@@ -251,6 +280,7 @@ private fun HeroDialog(hero: Hero, state: GameState, vm: GameViewModel, onDismis
         }
     }
 
+    if (skills) SkillTreeDialog(hero, state, vm, onDismiss = { skills = false })
     pickingSlot?.let { slot ->
         GearPicker(hero, slot, state, vm, onDismiss = { pickingSlot = null })
     }
@@ -367,6 +397,147 @@ private fun RecruitDialog(vm: GameViewModel, onDismiss: () -> Unit) {
             RpgButton("Recruit", enabled = name.isNotBlank() && category.isNotBlank()) {
                 vm.recruit(heroClass, name, category)
                 onDismiss()
+            }
+        }
+    }
+}
+
+@Composable
+private fun SkillTreeDialog(hero: Hero, state: GameState, vm: GameViewModel, onDismiss: () -> Unit) {
+    RpgDialog("${hero.name}'s skills", onDismiss) {
+        Text(
+            "Points available: ${hero.perkPoints}  (one per level)",
+            style = MaterialTheme.typography.bodySmall,
+            color = if (hero.perkPoints > 0) RpgColors.Charge else RpgColors.Dim,
+        )
+        Spacer(Modifier.height(6.dp))
+        Perk.entries.forEach { perk ->
+            val rank = hero.perk(perk)
+            val locked = hero.perks.values.sum() < perk.requiresSpent
+            Row(
+                Modifier.fillMaxWidth().padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Column(Modifier.weight(1f)) {
+                    Text(
+                        perk.label + if (locked) "  🔒" else "",
+                        style = MaterialTheme.typography.bodyMedium,
+                        color = if (locked) RpgColors.Disabled else RpgColors.Text,
+                    )
+                    Text(
+                        perk.effect + " per rank" + if (locked) " · needs ${perk.requiresSpent} points spent" else "",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = RpgColors.Dim,
+                    )
+                    Row(Modifier.padding(top = 2.dp), horizontalArrangement = Arrangement.spacedBy(3.dp)) {
+                        repeat(perk.maxRank) { i ->
+                            Box(
+                                Modifier
+                                    .size(10.dp)
+                                    .border(1.dp, RpgColors.Border)
+                                    .background(if (i < rank) RpgColors.Gold else Color.Transparent)
+                            )
+                        }
+                    }
+                }
+                RpgButton("+", enabled = GameEngine.canLearn(hero, perk)) { vm.learnPerk(hero.id, perk) }
+            }
+        }
+        Spacer(Modifier.height(10.dp))
+        Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+            RpgButton("Reset ${Rules.RESPEC_COST} G", enabled = hero.perks.isNotEmpty() && state.gold >= Rules.RESPEC_COST) {
+                vm.respec(hero.id)
+            }
+            Spacer(Modifier.weight(1f))
+            RpgButton("Done", onClick = onDismiss)
+        }
+    }
+}
+
+@Composable
+private fun Companions(state: GameState, vm: GameViewModel) {
+    var renaming by remember { mutableStateOf<Pet?>(null) }
+    val clock = LocalClock.current
+    RpgWindow(Modifier.fillMaxWidth()) {
+        SectionTitle("COMPANIONS")
+        if (state.pets.isEmpty() && state.eggs.isEmpty()) {
+            Text(
+                "Keep a daily streak going for 7 days to find an egg.",
+                style = MaterialTheme.typography.labelSmall,
+                color = RpgColors.Dim,
+            )
+        }
+        state.pets.forEach { pet ->
+            val active = pet.id == state.activePet
+            Row(
+                Modifier
+                    .fillMaxWidth()
+                    .clip(RoundedCornerShape(4.dp))
+                    .clickable { if (active) renaming = pet else vm.setActivePet(pet.id) }
+                    .padding(vertical = 4.dp),
+                verticalAlignment = Alignment.CenterVertically,
+            ) {
+                Cursor(active)
+                PixelSprite(
+                    Sprites.pet(pet.kind),
+                    Modifier
+                        .size(40.dp)
+                        .graphicsLayer {
+                            if (active) translationY = -abs(sin(clock.value / 180.0 + pet.id).toFloat()) * size.height * 0.15f
+                        },
+                    phase = pet.id.toInt() * 211,
+                    frameMs = if (active) 300 else 600,
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text("${pet.name}  Lv ${pet.level}", style = MaterialTheme.typography.bodyMedium)
+                    Text(
+                        pet.bonusText + if (active) " · with you" else " · tap to bring along",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = if (active) RpgColors.Gold else RpgColors.Dim,
+                    )
+                }
+            }
+        }
+        state.eggs.forEachIndexed { i, egg ->
+            Row(Modifier.fillMaxWidth().padding(vertical = 4.dp), verticalAlignment = Alignment.CenterVertically) {
+                Spacer(Modifier.width(16.dp))
+                // The egg wobbles harder the closer it is to hatching.
+                val close = egg.progress.toFloat() / egg.needed
+                PixelSprite(
+                    Sprites.egg,
+                    Modifier
+                        .size(40.dp)
+                        .graphicsLayer {
+                            transformOrigin = TransformOrigin(0.5f, 0.9f)
+                            rotationZ = if (i == 0) sin(clock.value / (220.0 - close * 120)).toFloat() * (4f + close * 14f) else 0f
+                        },
+                    animate = false,
+                )
+                Spacer(Modifier.width(8.dp))
+                Column(Modifier.weight(1f)) {
+                    Text(if (i == 0) "Egg (warming)" else "Egg (waiting)", style = MaterialTheme.typography.bodyMedium)
+                    StatBar(egg.progress, egg.needed, RpgColors.Exp, Modifier.fillMaxWidth())
+                    Text(
+                        "${egg.progress}/${egg.needed} quests to hatch",
+                        style = MaterialTheme.typography.labelSmall,
+                        color = RpgColors.Dim,
+                    )
+                }
+            }
+        }
+    }
+    renaming?.let { pet ->
+        var name by remember(pet.id) { mutableStateOf(pet.name) }
+        RpgDialog("Rename ${pet.kind.label}", onDismiss = { renaming = null }) {
+            RpgTextField(name, { name = it }, placeholder = pet.kind.label)
+            Spacer(Modifier.height(10.dp))
+            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp, Alignment.End)) {
+                RpgButton("Cancel") { renaming = null }
+                RpgButton("Save", enabled = name.isNotBlank()) {
+                    vm.renamePet(pet.id, name)
+                    renaming = null
+                }
             }
         }
     }

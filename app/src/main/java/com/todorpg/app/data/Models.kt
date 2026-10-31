@@ -26,15 +26,17 @@ enum class HeroClass(
     val skillElement: Element?,
     val blurb: String,
     val skillBlurb: String,
+    /** Advanced class reached by promotion. */
+    val promotedTitle: String,
 ) {
-    KNIGHT("Knight", "Slash", Element.SLASH, "Cleave", 4, Element.SLASH, "steady, strong hits", "a mighty 2x blow"),
-    MONK("Monk", "Flurry", Element.BLUNT, "Chakra", 4, Element.BLUNT, "fast flurry of blows", "strike and heal self 30%"),
-    RANGER("Ranger", "Snipe", Element.PIERCE, "Volley", 5, Element.PIERCE, "high critical chance", "three quick arrows"),
-    MAGE("Mage", "Fire", Element.FIRE, "Frost", 6, Element.ICE, "big magic damage", "huge ice damage"),
-    CLERIC("Cleric", "Holy", Element.HOLY, "Prayer", 6, null, "weak hits, heals an ally", "heal the whole party 30%"),
-    BARD("Bard", "Anthem", Element.SOUND, "Lullaby", 5, Element.SOUND, "weak hits, next ally +50%", "monster loses its next turn"),
-    SAMURAI("Samurai", "Iai", Element.SLASH, "Zanshin", 6, Element.SLASH, "heavy blows, good crits", "a guaranteed critical"),
-    DRUID("Druid", "Thorns", Element.NATURE, "Rebirth", 8, null, "light hits, heals party", "revive a fallen ally"),
+    KNIGHT("Knight", "Slash", Element.SLASH, "Cleave", 4, Element.SLASH, "steady, strong hits", "a mighty 2x blow", "Paladin"),
+    MONK("Monk", "Flurry", Element.BLUNT, "Chakra", 4, Element.BLUNT, "fast flurry of blows", "strike and heal self 30%", "Grandmaster"),
+    RANGER("Ranger", "Snipe", Element.PIERCE, "Volley", 5, Element.PIERCE, "high critical chance", "three quick arrows", "Sniper"),
+    MAGE("Mage", "Fire", Element.FIRE, "Frost", 6, Element.ICE, "big magic damage", "huge ice damage", "Archmage"),
+    CLERIC("Cleric", "Holy", Element.HOLY, "Prayer", 6, null, "weak hits, heals an ally", "heal the whole party 30%", "Saint"),
+    BARD("Bard", "Anthem", Element.SOUND, "Lullaby", 5, Element.SOUND, "weak hits, next ally +50%", "monster loses its next turn", "Virtuoso"),
+    SAMURAI("Samurai", "Iai", Element.SLASH, "Zanshin", 6, Element.SLASH, "heavy blows, good crits", "a guaranteed critical", "Shogun"),
+    DRUID("Druid", "Thorns", Element.NATURE, "Rebirth", 8, null, "light hits, heals party", "revive a fallen ally", "Archdruid"),
 }
 
 @Serializable
@@ -83,13 +85,94 @@ data class Hero(
     val mp: Int = Rules.maxMp(1),
     /** Halves the next monster hit. Cleared after the monster acts. */
     val guarding: Boolean = false,
+    val promoted: Boolean = false,
+    val perks: Map<Perk, Int> = emptyMap(),
 ) {
-    val maxHp: Int get() = Rules.maxHp(level) + gear.values.sumOf { it.hp }
-    val maxMp: Int get() = Rules.maxMp(level)
+    val maxHp: Int
+        get() = ((Rules.maxHp(level) + gear.values.sumOf { it.hp } + perk(Perk.VITALITY) * 12) *
+            if (promoted) 1.2 else 1.0).toInt()
+    val maxMp: Int get() = Rules.maxMp(level) + perk(Perk.FOCUS) * 4 + if (promoted) 5 else 0
     val expToNext: Int get() = Rules.expToNext(level)
-    val attack: Int get() = Rules.attack(level, weapon) + gear.values.sumOf { it.atk }
+    val attack: Int
+        get() = ((Rules.attack(level, weapon) + gear.values.sumOf { it.atk } + perk(Perk.MIGHT) * 3) *
+            if (promoted) 1.15 else 1.0).toInt()
+    val critBonus: Double get() = perk(Perk.PRECISION) * 0.07
+    /** Multiplier for skill damage and healing. */
+    val skillPower: Double get() = (if (perk(Perk.MASTERY) > 0) 1.5 else 1.0) * (if (promoted) 1.25 else 1.0)
+    val fortune: Double get() = 1.0 + perk(Perk.FORTUNE) * 0.1
+    val perkPoints: Int get() = (level - 1) - perks.values.sum()
+    val classTitle: String get() = if (promoted) heroClass.promotedTitle else heroClass.title
+    val canPromote: Boolean get() = !promoted && level >= Rules.PROMOTION_LEVEL
+    fun perk(p: Perk): Int = perks[p] ?: 0
     val defense: Int get() = gear.values.sumOf { it.def }
     val isKo: Boolean get() = hp <= 0
+}
+
+/** Skill-tree nodes. Heroes earn one point per level. */
+@Serializable
+enum class Perk(val label: String, val maxRank: Int, val effect: String, val requiresSpent: Int = 0) {
+    MIGHT("Might", 5, "+3 ATK"),
+    VITALITY("Vitality", 5, "+12 max HP"),
+    FOCUS("Focus", 5, "+4 max MP"),
+    PRECISION("Precision", 3, "+7% critical chance"),
+    FORTUNE("Fortune", 3, "+10% EXP and gold from quests"),
+    MASTERY("Mastery", 1, "skill power +50%", requiresSpent = 6),
+}
+
+@Serializable
+enum class PetKind(val label: String, val bonus: String) {
+    CHICK("Chick", "more gold from quests"),
+    PUP("Pup", "more EXP from quests"),
+    CAT("Cat", "higher critical chance"),
+    TURTLE("Turtle", "less damage from missed dailies"),
+    FAIRY("Fairy", "extra MP from quests"),
+}
+
+@Serializable
+data class Pet(val id: Long, val kind: PetKind, val name: String, val quests: Int = 0) {
+    /** Pets grow fonder (and stronger) as you complete quests with them. */
+    val level: Int get() = (1 + quests / Rules.PET_QUESTS_PER_LEVEL).coerceAtMost(5)
+    val bonusText: String
+        get() = when (kind) {
+            PetKind.CHICK -> "+${level * 4}% quest gold"
+            PetKind.PUP -> "+${level * 4}% quest EXP"
+            PetKind.CAT -> "+${level * 2}% critical chance"
+            PetKind.TURTLE -> "-${level * 8}% missed-daily damage"
+            PetKind.FAIRY -> "+${(level + 1) / 2} MP per quest"
+        }
+}
+
+@Serializable
+data class Egg(val id: Long, val progress: Int = 0) {
+    val needed: Int get() = Rules.EGG_QUESTS
+}
+
+@Serializable
+enum class Achievement(val title: String, val description: String, val reward: Int) {
+    FIRST_QUEST("First Steps", "Complete a quest", 20),
+    QUESTS_50("Adventurer", "Complete 50 quests", 50),
+    QUESTS_250("Veteran", "Complete 250 quests", 150),
+    QUESTS_1000("Living Legend", "Complete 1000 quests", 500),
+    STREAK_7("On a Roll", "Reach a 7-day streak", 50),
+    STREAK_30("Unstoppable", "Reach a 30-day streak", 200),
+    STREAK_100("Centurion", "Reach a 100-day streak", 600),
+    FIRST_VICTORY("First Victory", "Defeat a monster", 20),
+    SLAYER_25("Monster Hunter", "Defeat 25 monsters", 75),
+    SLAYER_100("Slayer", "Defeat 100 monsters", 250),
+    FLOOR_10("Delver", "Reach floor 10", 75),
+    FLOOR_25("Deep Diver", "Reach floor 25", 200),
+    FLOOR_50("Abyss Walker", "Reach floor 50", 500),
+    BREAKER("Breaker", "Break a monster", 30),
+    RAIDER("Raider", "Defeat a raid boss", 100),
+    RAID_LEADER("Raid Leader", "Defeat 10 raid bosses", 400),
+    SEASONED("Seasoned", "Get a hero to level 10", 75),
+    ASCENDED("Ascended", "Promote a hero", 200),
+    FULL_HOUSE("Full House", "Have 8 heroes in your party", 100),
+    MYTHIC_FIND("Mythic Find", "Find Legendary gear", 150),
+    NEW_FRIEND("New Friend", "Hatch a pet", 50),
+    MENAGERIE("Menagerie", "Hatch all 5 kinds of pet", 300),
+    SCHOLAR("Scholar", "Defeat every kind of monster", 300),
+    TREASURE("Treasure Hoard", "Earn 5000 gold in total", 200),
 }
 
 @Serializable
@@ -220,7 +303,20 @@ data class GameState(
     val settings: Settings = Settings(),
     /** Weaknesses the party has discovered by hitting them. */
     val knownWeak: Map<MonsterKind, Set<Element>> = emptyMap(),
+    val knownResist: Map<MonsterKind, Set<Element>> = emptyMap(),
+    val defeatedKinds: Map<MonsterKind, Int> = emptyMap(),
+    val achievements: Map<Achievement, Long> = emptyMap(),
+    val pets: List<Pet> = emptyList(),
+    val eggs: List<Egg> = emptyList(),
+    val activePet: Long? = null,
+    val nextPetId: Long = 1,
+    val starterEgg: Boolean = false,
+    val bestStreak: Int = 0,
+    val totalGold: Int = 0,
+    val breaks: Int = 0,
+    val legendaryFound: Boolean = false,
 ) {
+    fun pet(): Pet? = pets.firstOrNull { it.id == activePet }
     fun hero(id: Int): Hero? = heroes.firstOrNull { it.id == id }
     fun itemCount(item: Item): Int = items[item] ?: 0
 
@@ -245,6 +341,11 @@ object Rules {
     const val MAX_INVENTORY = 40
 
     const val ETHER_MP = 15
+    const val PROMOTION_LEVEL = 15
+    const val RESPEC_COST = 100
+    const val EGG_QUESTS = 10
+    const val MAX_EGGS = 3
+    const val PET_QUESTS_PER_LEVEL = 25
     const val MP_PER_TASK = 2
     const val BROKEN_TURNS = 3
 

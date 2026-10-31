@@ -1,6 +1,11 @@
 package com.todorpg.app.game
 
+import com.todorpg.app.data.Achievement
 import com.todorpg.app.data.Difficulty
+import com.todorpg.app.data.Egg
+import com.todorpg.app.data.Perk
+import com.todorpg.app.data.Pet
+import com.todorpg.app.data.PetKind
 import com.todorpg.app.data.Element
 import com.todorpg.app.data.Intent
 import com.todorpg.app.data.IntentType
@@ -62,7 +67,13 @@ data class VictoryEvent(
 ) : BattleEvent
 
 /** Short feedback shown after an action, e.g. "+20 EXP  +10 G". */
-data class Reward(val text: String, val heroId: Int, val levelUp: Boolean = false)
+data class Reward(
+    val text: String,
+    val heroId: Int,
+    val levelUp: Boolean = false,
+    val hatched: Pet? = null,
+    val newEgg: Boolean = false,
+)
 
 /**
  * All game rules as pure functions over [GameState]. No Android code here so it
@@ -169,7 +180,8 @@ object GameEngine {
                     } else {
                         val hero = heroes.firstOrNull { it.id == task.heroId }
                         if (hero != null && !hero.isKo) {
-                            val dmg = maxOf(1, state.monster.attack * misses - hero.defense)
+                            val turtle = state.pet()?.let { if (it.kind == PetKind.TURTLE) it.level * 0.08 else 0.0 } ?: 0.0
+                            val dmg = maxOf(1, ((state.monster.attack * misses - hero.defense) * (1 - turtle)).roundToInt())
                             val newHp = (hero.hp - dmg).coerceAtLeast(0)
                             heroes = heroes.replace(hero.copy(hp = newHp))
                             log += "Missed \"${task.title}\"! ${state.monster.name} hits ${hero.name} for $dmg." +
@@ -200,7 +212,14 @@ object GameEngine {
         return ensureRaid(next, today)
     }
 
-    private fun ensureRaid(state: GameState, today: Long): GameState {
+    private fun ensureRaid(state0: GameState, today: Long): GameState {
+        // Everyone gets one mysterious egg to start them off with pets.
+        val state = if (state0.starterEgg) state0 else state0.copy(
+            starterEgg = true,
+            eggs = state0.eggs + Egg(state0.nextPetId),
+            nextPetId = state0.nextPetId + 1,
+            log = (state0.log + "You found a mysterious egg! Complete quests to hatch it.").takeLast(Rules.MAX_LOG),
+        )
         val week = Rules.weekStart(today)
         if (state.raid?.weekStart == week) return state
         val raid = spawnRaid(week, state)
@@ -239,19 +258,26 @@ object GameEngine {
         if (task.isDone(today)) return state to null
         val hero = state.hero(task.heroId) ?: return state to null
 
-        val (exp, gold, newStreak) = when (task.type) {
+        val (exp, baseGold, newStreak) = when (task.type) {
             TaskType.DAILY -> {
                 val streak = if (task.lastCompletedDay == today - 1) task.streak + 1 else 1
                 Triple(Rules.dailyExp(task.difficulty, streak), Rules.dailyGold(task.difficulty, streak), streak)
             }
             TaskType.ONE_OFF -> Triple(Rules.oneOffExp(task.difficulty), Rules.oneOffGold(task.difficulty), 0)
         }
+        // Perks and the active pet boost quest rewards.
+        val pet = state.pet()
+        val petExp = if (pet?.kind == PetKind.PUP) 1 + pet.level * 0.04 else 1.0
+        val petGold = if (pet?.kind == PetKind.CHICK) 1 + pet.level * 0.04 else 1.0
+        val petMp = if (pet?.kind == PetKind.FAIRY) (pet.level + 1) / 2 else 0
+        val boostedExp = (exp * hero.fortune * petExp).roundToInt()
+        val gold = (baseGold * hero.fortune * petGold).roundToInt()
         // KO'd heroes still learn, just slower.
-        val earnedExp = if (hero.isKo) exp / 2 else exp
+        val earnedExp = if (hero.isKo) boostedExp / 2 else boostedExp
         val (leveled, levels) = gainExp(hero, earnedExp)
         val charged = leveled.copy(
             charges = minOf(Rules.MAX_CHARGES, leveled.charges + Rules.chargesFor(task.difficulty)),
-            mp = minOf(leveled.maxMp, leveled.mp + Rules.MP_PER_TASK),
+            mp = minOf(leveled.maxMp, leveled.mp + Rules.MP_PER_TASK + petMp),
         )
 
         val updatedTask = task.copy(lastCompletedDay = today, streak = newStreak)
@@ -271,15 +297,40 @@ object GameEngine {
             if (gold > 0) append("  +$gold G")
             if (task.type == TaskType.DAILY && newStreak > 1) append("  streak $newStreak")
         }
-        val next = state.copy(
+        var next = state.copy(
             heroes = state.heroes.replace(charged),
             tasks = state.tasks.map { if (it.id == taskId) updatedTask else it },
             gold = state.gold + gold,
+            totalGold = state.totalGold + gold,
+            bestStreak = maxOf(state.bestStreak, newStreak),
             raid = raid,
             tasksCompleted = state.tasksCompleted + 1,
-            log = (state.log + log).takeLast(Rules.MAX_LOG),
+            pets = state.pets.map { if (it.id == state.activePet) it.copy(quests = it.quests + 1) else it },
         )
-        return next to Reward(text, hero.id, levelUp = levels > 0)
+
+        // Eggs: every 7 days of a daily streak lays one; quests warm the oldest until it hatches.
+        var newEgg = false
+        if (task.type == TaskType.DAILY && newStreak > 0 && newStreak % 7 == 0 && next.eggs.size < Rules.MAX_EGGS) {
+            next = next.copy(eggs = next.eggs + Egg(next.nextPetId), nextPetId = next.nextPetId + 1)
+            newEgg = true
+            log += "A ${newStreak}-day streak! You found an egg."
+        }
+        var hatched: Pet? = null
+        next.eggs.firstOrNull()?.let { egg ->
+            val warmed = egg.copy(progress = egg.progress + 1)
+            next = if (warmed.progress >= warmed.needed) {
+                val pet = hatch(next, warmed.id, today)
+                hatched = pet
+                log += "The egg hatched into a ${pet.kind.label}!"
+                next.copy(
+                    eggs = next.eggs.drop(1),
+                    pets = next.pets + pet,
+                    activePet = next.activePet ?: pet.id,
+                )
+            } else next.copy(eggs = listOf(warmed) + next.eggs.drop(1))
+        }
+        next = next.copy(log = (state.log + log).takeLast(Rules.MAX_LOG))
+        return next to Reward(text, hero.id, levelUp = levels > 0, hatched = hatched, newEgg = newEgg)
     }
 
     /** Adds EXP and handles level-ups. Levelling up fully heals (and revives) the hero. */
@@ -352,6 +403,7 @@ object GameEngine {
         val log = mutableListOf<String>()
         var inspired = state.inspired
         var knownWeak = state.knownWeak
+        var knownResist = state.knownResist
         val c = hero.heroClass
 
         fun setHero(h: Hero) {
@@ -372,14 +424,18 @@ object GameEngine {
 
         var event = HeroEvent(hero.id, c, cmd.kind, null)
 
+        val skill = cmd.kind == ActionKind.SKILL
+        val petCrit = state.pet()?.let { if (it.kind == PetKind.CAT) it.level * 0.02 else 0.0 } ?: 0.0
+        var breaks = 0
+
         fun strike(mult: Double, element: Element, critChance: Double, forceCrit: Boolean = false): Int {
-            val critical = forceCrit || rng.nextDouble() < critChance
+            val critical = forceCrit || rng.nextDouble() < critChance + hero.critBonus + petCrit
             val weak = element in target.weak
             val resisted = element in target.resist
             val inspiredNow = inspired && c != HeroClass.BARD
             if (inspiredNow) inspired = false
             val roll = 0.85 + rng.nextDouble() * 0.3
-            val dmg = (hero.attack * mult * roll *
+            val dmg = (hero.attack * mult * roll * (if (skill) hero.skillPower else 1.0) *
                 (if (critical) 2.0 else 1.0) *
                 (if (inspiredNow) 1.5 else 1.0) *
                 (if (weak) 1.5 else if (resisted) 0.5 else 1.0) *
@@ -396,9 +452,11 @@ object GameEngine {
                     gauge = 0
                     broken = Rules.BROKEN_TURNS
                     broke = true
+                    breaks++
                     log += "${target.name} is BROKEN!"
                 }
             }
+            if (resisted) knownResist = knownResist + (target.kind to (knownResist[target.kind].orEmpty() + element))
             target = target.copy(hp = (target.hp - dmg).coerceAtLeast(0), breakGauge = gauge, broken = broken, counter = if (broke) 0 else target.counter)
             event = event.copy(
                 element = element,
@@ -414,7 +472,8 @@ object GameEngine {
         fun healHero(id: Int, amount: Int) {
             val h = current(id)
             if (h.isKo) return
-            setHero(h.copy(hp = minOf(h.maxHp, h.hp + amount)))
+            val boosted = if (skill) (amount * hero.skillPower).roundToInt() else amount
+            setHero(h.copy(hp = minOf(h.maxHp, h.hp + boosted)))
             event = event.copy(healed = event.healed + id)
         }
 
@@ -485,7 +544,13 @@ object GameEngine {
         if (event.weak) log += "It's super effective!"
 
         val events = mutableListOf<BattleEvent>(event)
-        var next = state.copy(heroes = heroes, inspired = inspired, knownWeak = knownWeak)
+        var next = state.copy(
+            heroes = heroes,
+            inspired = inspired,
+            knownWeak = knownWeak,
+            knownResist = knownResist,
+            breaks = state.breaks + breaks,
+        )
         next = if (raid) next.copy(raid = next.raid!!.copy(boss = target)) else next.copy(monster = target)
 
         if (target.hp == 0) {
@@ -571,7 +636,12 @@ object GameEngine {
                 up
             }
         }
-        var next = state.copy(heroes = heroes, gold = state.gold + m.goldReward)
+        var next = state.copy(
+            heroes = heroes,
+            gold = state.gold + m.goldReward,
+            totalGold = state.totalGold + m.goldReward,
+            defeatedKinds = state.defeatedKinds + (m.kind to (state.defeatedKinds[m.kind] ?: 0) + 1),
+        )
 
         // Consumable drops.
         if (!raid && rng.nextDouble() < if (m.isBoss) 1.0 else 0.25) {
@@ -590,6 +660,7 @@ object GameEngine {
         if (raid || m.isBoss || rng.nextDouble() < 0.35) {
             val gear = rollGear(next.nextGearId, m.floor, rng, minRarity)
             loot = gear
+            if (gear.rarity == Rarity.LEGENDARY) next = next.copy(legendaryFound = true)
             next = addToInventory(next.copy(nextGearId = next.nextGearId + 1), gear, log)
         }
 
@@ -729,6 +800,96 @@ object GameEngine {
             items = state.items + (item to state.itemCount(item) - 1),
             log = (state.log + msg).takeLast(Rules.MAX_LOG),
         )
+    }
+
+    // endregion
+
+    // region Growth: promotion, perks, pets, achievements
+
+    /** Picks a kind the player doesn't have yet when possible. */
+    private fun hatch(state: GameState, id: Long, today: Long): Pet {
+        val owned = state.pets.map { it.kind }.toSet()
+        val fresh = PetKind.entries.filter { it !in owned }
+        val pool = fresh.ifEmpty { PetKind.entries }
+        val kind = pool[Random(id * 7919 + today).nextInt(pool.size)]
+        return Pet(id, kind, kind.label)
+    }
+
+    fun promote(state: GameState, heroId: Int): GameState {
+        val hero = state.hero(heroId) ?: return state
+        if (!hero.canPromote) return state
+        val up = hero.copy(promoted = true).let { it.copy(hp = it.maxHp, mp = it.maxMp) }
+        return state.copy(
+            heroes = state.heroes.replace(up),
+            log = (state.log + "${hero.name} is now a ${hero.heroClass.promotedTitle}!").takeLast(Rules.MAX_LOG),
+        )
+    }
+
+    fun canLearn(hero: Hero, perk: Perk): Boolean =
+        hero.perkPoints > 0 && hero.perk(perk) < perk.maxRank && hero.perks.values.sum() >= perk.requiresSpent
+
+    fun learnPerk(state: GameState, heroId: Int, perk: Perk): GameState {
+        val hero = state.hero(heroId) ?: return state
+        if (!canLearn(hero, perk)) return state
+        val up = hero.copy(perks = hero.perks + (perk to hero.perk(perk) + 1))
+        // Raising max HP/MP also tops up by the same amount.
+        val healed = up.copy(hp = minOf(up.maxHp, up.hp + (up.maxHp - hero.maxHp)), mp = minOf(up.maxMp, up.mp + (up.maxMp - hero.maxMp)))
+        return state.copy(heroes = state.heroes.replace(healed))
+    }
+
+    fun respec(state: GameState, heroId: Int): GameState {
+        val hero = state.hero(heroId) ?: return state
+        if (hero.perks.isEmpty() || state.gold < Rules.RESPEC_COST) return state
+        val reset = hero.copy(perks = emptyMap()).clampHp()
+        return state.copy(
+            heroes = state.heroes.replace(reset.copy(mp = minOf(reset.mp, reset.maxMp))),
+            gold = state.gold - Rules.RESPEC_COST,
+        )
+    }
+
+    fun setActivePet(state: GameState, petId: Long): GameState =
+        if (state.pets.any { it.id == petId }) state.copy(activePet = petId) else state
+
+    fun renamePet(state: GameState, petId: Long, name: String): GameState =
+        state.copy(pets = state.pets.map { if (it.id == petId && name.isNotBlank()) it.copy(name = name.trim()) else it })
+
+    fun earned(state: GameState, a: Achievement): Boolean = when (a) {
+        Achievement.FIRST_QUEST -> state.tasksCompleted >= 1
+        Achievement.QUESTS_50 -> state.tasksCompleted >= 50
+        Achievement.QUESTS_250 -> state.tasksCompleted >= 250
+        Achievement.QUESTS_1000 -> state.tasksCompleted >= 1000
+        Achievement.STREAK_7 -> state.bestStreak >= 7
+        Achievement.STREAK_30 -> state.bestStreak >= 30
+        Achievement.STREAK_100 -> state.bestStreak >= 100
+        Achievement.FIRST_VICTORY -> state.monstersDefeated >= 1
+        Achievement.SLAYER_25 -> state.monstersDefeated >= 25
+        Achievement.SLAYER_100 -> state.monstersDefeated >= 100
+        Achievement.FLOOR_10 -> state.floor >= 10
+        Achievement.FLOOR_25 -> state.floor >= 25
+        Achievement.FLOOR_50 -> state.floor >= 50
+        Achievement.BREAKER -> state.breaks >= 1
+        Achievement.RAIDER -> state.raidsDefeated >= 1
+        Achievement.RAID_LEADER -> state.raidsDefeated >= 10
+        Achievement.SEASONED -> state.heroes.any { it.level >= 10 }
+        Achievement.ASCENDED -> state.heroes.any { it.promoted }
+        Achievement.FULL_HOUSE -> state.heroes.size >= Rules.MAX_PARTY
+        Achievement.MYTHIC_FIND -> state.legendaryFound
+        Achievement.NEW_FRIEND -> state.pets.isNotEmpty()
+        Achievement.MENAGERIE -> state.pets.map { it.kind }.toSet().size == PetKind.entries.size
+        Achievement.SCHOLAR -> MonsterKind.entries.all { (state.defeatedKinds[it] ?: 0) > 0 }
+        Achievement.TREASURE -> state.totalGold >= 5000
+    }
+
+    /** Unlocks any newly earned achievements, paying out their gold. */
+    fun checkAchievements(state: GameState, today: Long): Pair<GameState, List<Achievement>> {
+        val fresh = Achievement.entries.filter { it !in state.achievements && earned(state, it) }
+        if (fresh.isEmpty()) return state to emptyList()
+        val reward = fresh.sumOf { it.reward }
+        return state.copy(
+            achievements = state.achievements + fresh.associateWith { today },
+            gold = state.gold + reward,
+            log = (state.log + fresh.map { "Achievement: ${it.title}! +${it.reward} G" }).takeLast(Rules.MAX_LOG),
+        ) to fresh
     }
 
     // endregion
